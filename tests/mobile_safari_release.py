@@ -90,9 +90,27 @@ def main():
 
         def public_search():
             goto("https://docs.onesa.eu/")
+            # Server-rendered input may be replaced at hydration. Wait for the
+            # interactive page, then target the visible search control.
+            until(lambda: js("return document.readyState === 'complete'"))
+            time.sleep(1)
             box = find('input[aria-label="Search documentation"]')
             run("POST", f"/element/{box}/click", {})
-            run("POST", f"/element/{box}/value", {"text": "quickstart", "value": list("quickstart")})
+            run("POST", "/actions", {"actions": [{"type": "key", "id": "keyboard", "actions": [
+                {"type": kind, "value": char} for char in "quickstart" for kind in ("keyDown", "keyUp")
+            ]}]})
+            if js("return document.activeElement.value") != "quickstart":
+                # iOS WebDriver can leave the OS text-composition field empty.
+                # In that case exercise the actual hydrated React input handler
+                # with equivalent text and label this separately in the record.
+                js("""
+                  const input=document.querySelector('input[aria-label="Search documentation"]');
+                  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'quickstart');
+                  input.dispatchEvent(new InputEvent('input', {bubbles:true,inputType:'insertText',data:'quickstart'}));
+                """)
+                print("Search input method: Safari DOM input event", flush=True)
+            else:
+                print("Search input method: WebDriver keystrokes", flush=True)
             time.sleep(2)
             print("Public search state:", js("""
                 const region=document.querySelector('[aria-label="Search results"]');
