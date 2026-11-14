@@ -98,7 +98,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             {
                 "Cache-Control": "private, no-store",
                 "X-Content-Type-Options": "nosniff",
-                "Referrer-Policy": "no-referrer",
+                "Referrer-Policy": "same-origin",
                 "Content-Security-Policy": "default-src 'none'; img-src 'self'; style-src 'unsafe-inline'; form-action 'self'; base-uri 'none'; frame-ancestors 'none'",
             }
         )

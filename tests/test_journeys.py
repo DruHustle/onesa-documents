@@ -294,6 +294,7 @@ class Journeys(unittest.TestCase):
         self.assertIn("Customer changes", response.text)
         self.assertIn("Draft &lt;edit&gt;", response.text)
         self.assertIn("no-store", response.headers["cache-control"])
+        self.assertEqual(response.headers["referrer-policy"], "same-origin")
         headers = self.bearer(EDITOR, **{"https://onesa.eu/claims/roles": ["viewer"]})
         self.assertEqual(
             self.client.post(
