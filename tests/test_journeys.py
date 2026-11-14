@@ -302,6 +302,25 @@ class Journeys(unittest.TestCase):
             403,
         )
 
+    def test_permanent_public_and_internal_origins(self):
+        for public in (
+            "https://docs.onesa.eu",
+            "https://DOCS.ONESA.EU.",
+            "https://docs.onesa.eu:443",
+        ):
+            with self.assertRaisesRegex(ValueError, "public Developer Docs"):
+                create(dict(self.cfg, DOCS_ORIGIN=public))
+        with self.assertRaisesRegex(ValueError, "dedicated internal origin"):
+            create(dict(self.cfg, DOCS_ENVIRONMENT="production"))
+        create(
+            dict(
+                self.cfg,
+                DOCS_ORIGIN="https://docs.engineering.onesa.eu",
+                DOCS_ISSUER="https://auth.onesa.eu",
+                DOCS_ENVIRONMENT="production",
+            )
+        )
+
     def test_unsafe_return_and_unsigned_input(self):
         for val in [
             "https://other.test/a",

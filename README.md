@@ -1,6 +1,6 @@
 # Onesa Engineering Documents
 
-Independent web application, API and private document store for engineering records. Existing Portal sessions, Portal roles and public Developer Docs are outside this application. The existing engineering hostname and Cloudflare Access remain the live site until the private pilot has passed. `docs.onesa.eu` currently serves public Developer Docs and must retain its public URLs through any later domain transition.
+Independent web application, API and private document store for engineering records. Existing Portal sessions, Portal roles and public Developer Docs are outside this application. The production origin is **https://docs.engineering.onesa.eu**. Its content requires authentication. **https://docs.onesa.eu** serves public Developer Docs without sign-in, including direct guide bookmarks. These are permanent, independent sites. Keep the existing Cloudflare Access site serving the internal domain until the replacement passes its pilot.
 
 ## Run an isolated pilot
 
@@ -11,7 +11,8 @@ Use Python 3.12, install `python -m pip install -r requirements.txt` and run `py
 | DOCS_ISSUER | Exact HTTPS Auth0 custom-domain origin for this environment |
 | DOCS_AUDIENCE | Dedicated Docs API identifier, intended production value `https://api.docs.onesa.eu` |
 | DOCS_CLIENT_ID / DOCS_CLIENT_SECRET | Environment-specific confidential web application with exact callback `DOCS_ORIGIN/callback` |
-| DOCS_ORIGIN | HTTPS origin an operator has assigned exclusively to this deployment |
+| DOCS_ORIGIN | Internal host in production, `https://docs.engineering.onesa.eu`. Use a separate protected hostname for staging. |
+| DOCS_ENVIRONMENT | Set to `production` for the live deployment to enforce the exact internal origin and issuer. |
 | DOCS_DATA | Private writable volume containing the service database and the issuer's public signing-key cache |
 
 The web client uses Authorization Code, S256 PKCE, a nonce and a one-use browser-bound state. Access tokens must be signed RS256 for the configured issuer and resource. The Identity policy emits a stable UUID and audience-scoped products and roles under `https://onesa.eu/claims/`. Engineering Document access requires product `engineering-documents` and an explicit per-document ACL. Draft edits additionally require a Docs editor or admin role. A Portal administrator receives no implicit document grant.

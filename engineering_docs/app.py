@@ -63,6 +63,15 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     cfg = os.environ if settings is None else settings
     issuer = https_origin(cfg["DOCS_ISSUER"]) + "/"
     origin = https_origin(cfg["DOCS_ORIGIN"])
+    if urlsplit(origin).hostname.rstrip(".").lower() == "docs.onesa.eu":
+        raise ValueError("docs.onesa.eu is reserved for public Developer Docs")
+    if cfg.get("DOCS_ENVIRONMENT") == "production" and (
+        origin != "https://docs.engineering.onesa.eu"
+        or issuer != "https://auth.onesa.eu/"
+    ):
+        raise ValueError(
+            "Production Engineering Documents requires the dedicated internal origin and Onesa Identity issuer"
+        )
     audience = cfg["DOCS_AUDIENCE"]
     client = cfg["DOCS_CLIENT_ID"]
     secret = cfg["DOCS_CLIENT_SECRET"]
