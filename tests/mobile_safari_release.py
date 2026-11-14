@@ -55,14 +55,26 @@ def main():
     command("xcrun", "simctl", "spawn", udid, "defaults", "write", "com.apple.mobilesafari", "AllowRemoteAutomation", "-bool", "YES")
     command("xcrun", "simctl", "spawn", udid, "defaults", "write", "com.apple.webinspectord", "RemoteInspectionEnabled", "-bool", "YES")
     command("sudo", "safaridriver", "--enable")
+    command("xcrun", "simctl", "launch", udid, "com.apple.mobilesafari")
+    time.sleep(4)
     driver = subprocess.Popen(["safaridriver", "--port", "4445"])
     failures = []
     try:
         until(lambda: webdriver("GET", "/status") is not None)
-        session = webdriver("POST", "/session", {"capabilities": {"alwaysMatch": {
+        capabilities = {"capabilities": {"alwaysMatch": {
             "browserName": "Safari", "platformName": "iOS",
             "safari:useSimulator": True, "safari:deviceUDID": udid,
-        }}})
+        }}}
+        for attempt in range(3):
+            try:
+                session = webdriver("POST", "/session", capabilities, timeout=90)
+                break
+            except (RuntimeError, TimeoutError):
+                if attempt == 2:
+                    raise
+                subprocess.run(["xcrun", "simctl", "terminate", udid, "com.apple.mobilesafari"], check=False)
+                command("xcrun", "simctl", "launch", udid, "com.apple.mobilesafari")
+                time.sleep(4)
         base = "/session/" + session["sessionId"]
         def run(method, path, payload=None):
             return webdriver(method, base + path, payload)
