@@ -64,9 +64,9 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     issuer = https_origin(cfg["DOCS_ISSUER"]) + "/"
     origin = https_origin(cfg["DOCS_ORIGIN"])
     if urlsplit(origin).hostname.rstrip(".").lower() == "docs.onesa.eu":
-        raise ValueError("docs.onesa.eu is reserved for public Developer Docs")
+        raise ValueError("docs.onesa.eu is reserved for public documents")
     if urlsplit(origin).hostname.rstrip(".").lower() == "docs.engineering.onesa.eu":
-        raise ValueError("Legacy engineering host is redirect-only")
+        raise ValueError("The legacy engineering hostname is retired")
     if cfg.get("DOCS_ENVIRONMENT") == "production" and (
         origin != "https://docs.internal.onesa.eu" or issuer != "https://auth.onesa.eu/"
     ):
