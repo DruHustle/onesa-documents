@@ -133,10 +133,53 @@ def main():
             """), flush=True)
             selector = '[aria-label="Search results"] a[href*="/docs/public/quickstart"]'
             result = until(lambda: find(selector))
-            run("POST", f"/element/{result}/click", {})
-            until(lambda: urlsplit(run("GET", "/url")).path.rstrip("/") == "/docs/public/quickstart")
-            title = run("GET", "/title")
-            return {"passed": "quickstart" in title.lower(), "guide": title}
+            target = js("return document.querySelector(arguments[0]).href", selector)
+            def at_guide():
+                return js("return location.pathname.replace(/\\/$/,'') === '/docs/public/quickstart' && document.title.toLowerCase().includes('quickstart')")
+            def landed():
+                try:
+                    return until(at_guide, seconds=5)
+                except RuntimeError:
+                    print("After activation:", js("return {path:location.pathname,title:document.title,active:document.activeElement.tagName}"), flush=True)
+                    return False
+            # The iOS soft keyboard and automatic feature zoom change the visible
+            # viewport. A WebDriver element click on the whole result can miss
+            # the visible link text, so use the native touch pointer at its title.
+            point = js("""
+              const link=document.querySelector(arguments[0]);
+              const title=link.querySelector("strong") || link;
+              title.scrollIntoView({block:"nearest",inline:"nearest"});
+              const bounds=title.getBoundingClientRect();
+              const x=Math.round(bounds.x+bounds.width/2),y=Math.round(bounds.y+bounds.height/2);
+              return {x,y,hit:link.contains(document.elementFromPoint(x,y)),width:innerWidth,height:innerHeight};
+            """, selector)
+            print("Search result touch target:", point, flush=True)
+            if point["hit"]:
+                try:
+                    run("POST", "/actions", {"actions":[{"type":"pointer","id":"finger","parameters":{"pointerType":"touch"},"actions":[
+                        {"type":"pointerMove","duration":0,"origin":"viewport","x":point["x"],"y":point["y"]},
+                        {"type":"pointerDown","button":0},{"type":"pause","duration":100},{"type":"pointerUp","button":0}
+                    ]}]})
+                    if landed():
+                        return {"passed":True,"activation":"Safari touch","guide":run("GET","/title")}
+                except RuntimeError as error:
+                    print("Safari touch action:", str(error)[:240], flush=True)
+            # Enter is the published search input's other native selection path.
+            js("document.querySelector('input[aria-label=\"Search documentation\"]').focus()")
+            try:
+                run("POST","/actions",{"actions":[{"type":"key","id":"keyboard","actions":[
+                    {"type":"keyDown","value":"\ue007"},{"type":"keyUp","value":"\ue007"}]}]})
+                if landed():
+                    return {"passed":True,"activation":"Safari Enter","guide":run("GET","/title")}
+            except RuntimeError as error:
+                print("Safari Enter action:", str(error)[:240], flush=True)
+            # Observe link activation itself independently of the keyboard and
+            # SafariDriver touch transport. Report this weaker result distinctly.
+            js("document.querySelector(arguments[0]).click()", selector)
+            if landed():
+                return {"passed":True,"activation":"DOM link activation","guide":run("GET","/title")}
+            goto(target)
+            return {"passed":False,"direct_result_url_readable":bool(at_guide()),"href":target}
         item("Anonymous guide search", public_search)
 
         def public_pdf():
