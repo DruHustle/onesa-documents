@@ -1,0 +1,10 @@
+{
+  "name": "onesa-legacy-documents-redirect",
+  "main": "legacy_redirect.mjs",
+  "compatibility_date": "2026-11-14",
+  "workers_dev": false,
+  "preview_urls": false,
+  "routes": [
+    { "pattern": "docs.engineering.onesa.eu/*", "zone_name": "onesa.eu" }
+  ]
+}

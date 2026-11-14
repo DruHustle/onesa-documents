@@ -12,9 +12,9 @@ import jwt
 from cryptography.hazmat.primitives.asymmetric import rsa
 from fastapi.testclient import TestClient
 
-from engineering_docs import catalog
-from engineering_docs.app import create
-from engineering_docs.oidc import PRODUCT, PRODUCTS, UID, Keys
+from internal_documents import catalog
+from internal_documents.app import create
+from internal_documents.oidc import PRODUCT, PRODUCTS, UID, Keys
 
 ISS = "https://identity.example.test/"
 AUD = "https://api.docs.onesa.eu"
@@ -316,11 +316,54 @@ class Journeys(unittest.TestCase):
         create(
             dict(
                 self.cfg,
-                DOCS_ORIGIN="https://docs.engineering.onesa.eu",
+                DOCS_ORIGIN="https://docs.internal.onesa.eu",
                 DOCS_ISSUER="https://auth.onesa.eu",
                 DOCS_ENVIRONMENT="production",
             )
         )
+
+    def test_legacy_engineering_grant_never_reads_hr_even_with_document_acl(self):
+        from copy import deepcopy
+
+        hr = deepcopy(self.batch["documents"][0])
+        hr.update(
+            id="hr-manual",
+            collection="hr",
+            product="company",
+            bookmark="/docs/hr/handbook",
+        )
+        hr["revisions"][0]["attachments"][0]["id"] = "hr-attachment"
+        self.batch["documents"] = [hr]
+        self.upload()
+        legacy = self.bearer(EDITOR, products=["engineering-documents"])
+        self.assertEqual(
+            len(self.client.get("/api/documents", headers=legacy).json()), 1
+        )
+        for route in [
+            "/docs/hr/handbook",
+            "/api/documents/hr-manual",
+            "/api/attachments/hr-attachment",
+        ]:
+            self.assertEqual(self.client.get(route, headers=legacy).status_code, 404)
+            self.assertEqual(
+                self.client.get(route, headers=self.bearer(EDITOR)).status_code, 200
+            )
+        self.assertEqual(
+            self.client.post(
+                "/api/documents/hr-manual/drafts",
+                headers=legacy,
+                json={"base_revision": "02", "title": "Test", "body": "Draft"},
+            ).status_code,
+            404,
+        )
+        self.assertEqual(
+            self.client.get(
+                "/docs/hr/handbook", headers=self.bearer(PORTAL)
+            ).status_code,
+            404,
+        )
+        with self.assertRaisesRegex(ValueError, "redirect-only"):
+            create(dict(self.cfg, DOCS_ORIGIN="https://docs.engineering.onesa.eu"))
 
     def test_unsafe_return_and_unsigned_input(self):
         for val in [

@@ -1,4 +1,4 @@
-name: Verify Engineering Documents
+name: Verify Onesa Documents
 on:
   pull_request:
   workflow_dispatch:
@@ -17,3 +17,5 @@ jobs:
           python-version: '3.12'
       - run: python -m pip install -r requirements.txt
       - run: python -m unittest discover -s tests -v
+      - run: python -m unittest discover -s public/tests -v
+      - run: node --test deploy/legacy_redirect.test.mjs
