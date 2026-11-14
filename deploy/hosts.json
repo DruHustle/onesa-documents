@@ -1,5 +1,18 @@
 {
-  "public": {"origin":"https://docs.onesa.eu","root":"public","authentication":"none","content":"approved external documents"},
-  "internal": {"origin":"https://docs.internal.onesa.eu","root":"internal_documents","authentication":"Onesa Identity plus per-document access","collections":["engineering","hr","other"]},
-  "legacy_redirect": {"hostname":"docs.engineering.onesa.eu","target_origin":"https://docs.internal.onesa.eu","serves_content":false}
+  "public": {
+    "origin": "https://docs.onesa.eu",
+    "root": "public",
+    "authentication": "none",
+    "content": "approved external documents"
+  },
+  "internal": {
+    "origin": "https://docs.internal.onesa.eu",
+    "root": "internal_documents",
+    "authentication": "Onesa Identity plus per-document access",
+    "collections": [
+      "engineering",
+      "hr",
+      "other"
+    ]
+  }
 }
