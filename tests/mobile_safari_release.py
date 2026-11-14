@@ -83,17 +83,31 @@ def main():
                 failures.append(label)
 
         def public_guide():
+            goto("https://docs.onesa.eu/docs/public/quickstart")
+            title = run("GET", "/title")
+            return {"passed": "quickstart" in title.lower(), "guide": title}
+        item("Anonymous guide deep link and reading", public_guide)
+
+        def public_search():
             goto("https://docs.onesa.eu/")
             box = find('input[aria-label="Search documentation"]')
             run("POST", f"/element/{box}/click", {})
             run("POST", f"/element/{box}/value", {"text": "quickstart", "value": list("quickstart")})
-            selector = '.global-search a[href*="/docs/public/quickstart"]'
+            time.sleep(2)
+            print("Public search state:", js("""
+                const region=document.querySelector('[aria-label="Search results"]');
+                return {query:document.querySelector('input[aria-label="Search documentation"]').value,
+                  status:region?.querySelector('[role=status]')?.innerText,
+                  text:region?.innerText.slice(0,70),
+                  links:[...(region?.querySelectorAll('a')||[])].slice(0,3).map(a=>a.pathname)};
+            """), flush=True)
+            selector = '[aria-label="Search results"] a[href*="/docs/public/quickstart"]'
             result = until(lambda: find(selector))
             run("POST", f"/element/{result}/click", {})
             until(lambda: urlsplit(run("GET", "/url")).path.rstrip("/") == "/docs/public/quickstart")
             title = run("GET", "/title")
             return {"passed": "quickstart" in title.lower(), "guide": title}
-        item("Anonymous guide search and reading", public_guide)
+        item("Anonymous guide search", public_search)
 
         def public_pdf():
             goto("https://docs.onesa.eu/downloads")
