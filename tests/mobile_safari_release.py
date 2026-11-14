@@ -1,6 +1,8 @@
 """Read-only release checks through Mobile Safari on a hosted iOS simulator."""
 import json
 import subprocess
+import concurrent.futures
+import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -100,87 +102,7 @@ def main():
             return {"passed": "quickstart" in title.lower(), "guide": title}
         item("Anonymous guide deep link and reading", public_guide)
 
-        def public_search():
-            goto("https://docs.onesa.eu/")
-            # Server-rendered input may be replaced at hydration. Wait for the
-            # interactive page, then target the visible search control.
-            until(lambda: js("return document.readyState === 'complete'"))
-            time.sleep(1)
-            box = find('input[aria-label="Search documentation"]')
-            run("POST", f"/element/{box}/click", {})
-            run("POST", "/actions", {"actions": [{"type": "key", "id": "keyboard", "actions": [
-                {"type": kind, "value": char} for char in "quickstart" for kind in ("keyDown", "keyUp")
-            ]}]})
-            if js("return document.activeElement.value") != "quickstart":
-                # iOS WebDriver can leave the OS text-composition field empty.
-                # In that case exercise the actual hydrated React input handler
-                # with equivalent text and label this separately in the record.
-                js("""
-                  const input=document.querySelector('input[aria-label="Search documentation"]');
-                  Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value').set.call(input, 'quickstart');
-                  input.dispatchEvent(new InputEvent('input', {bubbles:true,inputType:'insertText',data:'quickstart'}));
-                """)
-                print("Search input method: Safari DOM input event", flush=True)
-            else:
-                print("Search input method: WebDriver keystrokes", flush=True)
-            time.sleep(2)
-            print("Public search state:", js("""
-                const region=document.querySelector('[aria-label="Search results"]');
-                return {query:document.querySelector('input[aria-label="Search documentation"]').value,
-                  status:region?.querySelector('[role=status]')?.innerText,
-                  text:region?.innerText.slice(0,70),
-                  links:[...(region?.querySelectorAll('a')||[])].slice(0,3).map(a=>a.pathname)};
-            """), flush=True)
-            selector = '[aria-label="Search results"] a[href*="/docs/public/quickstart"]'
-            result = until(lambda: find(selector))
-            target = js("return document.querySelector(arguments[0]).href", selector)
-            def at_guide():
-                return js("return location.pathname.replace(/\\/$/,'') === '/docs/public/quickstart' && document.title.toLowerCase().includes('quickstart')")
-            def landed():
-                try:
-                    return until(at_guide, seconds=5)
-                except RuntimeError:
-                    print("After activation:", js("return {path:location.pathname,title:document.title,active:document.activeElement.tagName}"), flush=True)
-                    return False
-            # The iOS soft keyboard and automatic feature zoom change the visible
-            # viewport. A WebDriver element click on the whole result can miss
-            # the visible link text, so use the native touch pointer at its title.
-            point = js("""
-              const link=document.querySelector(arguments[0]);
-              const title=link.querySelector("strong") || link;
-              title.scrollIntoView({block:"nearest",inline:"nearest"});
-              const bounds=title.getBoundingClientRect();
-              const x=Math.round(bounds.x+bounds.width/2),y=Math.round(bounds.y+bounds.height/2);
-              return {x,y,hit:link.contains(document.elementFromPoint(x,y)),width:innerWidth,height:innerHeight};
-            """, selector)
-            print("Search result touch target:", point, flush=True)
-            if point["hit"]:
-                try:
-                    run("POST", "/actions", {"actions":[{"type":"pointer","id":"finger","parameters":{"pointerType":"touch"},"actions":[
-                        {"type":"pointerMove","duration":0,"origin":"viewport","x":point["x"],"y":point["y"]},
-                        {"type":"pointerDown","button":0},{"type":"pause","duration":100},{"type":"pointerUp","button":0}
-                    ]}]})
-                    if landed():
-                        return {"passed":True,"activation":"Safari touch","guide":run("GET","/title")}
-                except RuntimeError as error:
-                    print("Safari touch action:", str(error)[:240], flush=True)
-            # Enter is the published search input's other native selection path.
-            js("document.querySelector('input[aria-label=\"Search documentation\"]').focus()")
-            try:
-                run("POST","/actions",{"actions":[{"type":"key","id":"keyboard","actions":[
-                    {"type":"keyDown","value":"\ue007"},{"type":"keyUp","value":"\ue007"}]}]})
-                if landed():
-                    return {"passed":True,"activation":"Safari Enter","guide":run("GET","/title")}
-            except RuntimeError as error:
-                print("Safari Enter action:", str(error)[:240], flush=True)
-            # Observe link activation itself independently of the keyboard and
-            # SafariDriver touch transport. Report this weaker result distinctly.
-            js("document.querySelector(arguments[0]).click()", selector)
-            if landed():
-                return {"passed":True,"activation":"DOM link activation","guide":run("GET","/title")}
-            goto(target)
-            return {"passed":False,"direct_result_url_readable":bool(at_guide()),"href":target}
-        item("Anonymous guide search", public_search)
+
 
         def public_pdf():
             goto("https://docs.onesa.eu/downloads")
@@ -217,7 +139,75 @@ def main():
                 passed = has_login and (condition == "portal" or location.hostname == "auth.onesa.eu")
                 return {"passed": passed, "host": location.hostname, "path": location.path, "page": title, "sign_in_visible": has_login}
             item(label, observe)
-        run("DELETE", "")
+        def result_touch():
+            goto("https://docs.onesa.eu/")
+            until(lambda: js("return document.readyState === 'complete'"))
+            time.sleep(1)
+            box = find('input[aria-label="Search documentation"]')
+            run("POST", f"/element/{box}/click", {})
+            js("""
+              const input=document.querySelector('input[aria-label="Search documentation"]');
+              Object.getOwnPropertyDescriptor(HTMLInputElement.prototype,'value').set.call(input,'quickstart');
+              input.dispatchEvent(new InputEvent('input',{bubbles:true,inputType:'insertText',data:'quickstart'}));
+            """)
+            selector = '[aria-label="Search results"] a[href*="/docs/public/quickstart"]'
+            until(lambda: find(selector))
+            target = js("return document.querySelector(arguments[0]).href", selector)
+            point = js("""
+              const link=document.querySelector(arguments[0]), title=link.querySelector("strong")||link;
+              title.scrollIntoView({block:"nearest",inline:"nearest"});
+              const b=title.getBoundingClientRect(), x=Math.round(b.x+b.width/2), y=Math.round(b.y+b.height/2);
+              return {x,y,hit:link.contains(document.elementFromPoint(x,y))};
+            """, selector)
+            if not point["hit"]:
+                return {"passed":False,"reason":"first result title occluded","result":target}
+            # Read the OS-rendered screen after touch independently of SafariDriver.
+            # A timed-out WebDriver command must not prevent the observation or
+            # contaminate the earlier independent URL, PDF and Portal journeys.
+            with tempfile.TemporaryDirectory() as temp:
+                folder = Path(temp)
+                swift = folder / "screen.swift"
+                swift.write_text("""
+import Vision
+import Foundation
+let request = VNRecognizeTextRequest()
+request.recognitionLevel = .accurate
+try VNImageRequestHandler(url: URL(fileURLWithPath: CommandLine.arguments[1])).perform([request])
+print((request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " | "))
+""")
+                reader = str(folder / "read-screen")
+                command("xcrun","swiftc",str(swift),"-o",reader)
+                def read_screen():
+                    path = str(folder / "display.png")
+                    command("xcrun","simctl","io",udid,"screenshot",path)
+                    return command(reader,path).lower()
+                before = read_screen()
+                print("Before touch, Apple Vision from the simulator display:", before[:680], flush=True)
+                payload = {"actions":[{"type":"pointer","id":"finger","parameters":{"pointerType":"touch"},"actions":[
+                    {"type":"pointerMove","duration":0,"origin":"viewport","x":point["x"],"y":point["y"]},
+                    {"type":"pointerDown","button":0},{"type":"pause","duration":100},{"type":"pointerUp","button":0}]}]}
+                with concurrent.futures.ThreadPoolExecutor(1) as pool:
+                    touch = pool.submit(webdriver, "POST", base+"/actions", payload, 9)
+                    after = ""
+                    for delay in (2,3,4):
+                        time.sleep(delay)
+                        after = read_screen()
+                        print("After touch, Apple Vision from the simulator display:", after[:840], flush=True)
+                        # The linked guide's numbered section is absent from
+                        # the closed and open search overlays on the homepage.
+                        if "developer quickstart" in after and any(marker in after and marker not in before for marker in ("docker-only application startup","docker-only","git clone","cd onesa-ai-platform","all commands below run","reproducible review","compose v2","python3 scripts/bootstrap")):
+                            return {"passed":True,"activation":"native Safari touch; independent display OCR","result":target}
+                    try:
+                        touch.result()
+                    except (OSError, RuntimeError) as error:
+                        print("SafariDriver touch transport:",str(error)[:160],flush=True)
+                    return {"passed":False,"result":target,"reason":"guide page not confirmed from simulator display"}
+
+        item("Anonymous guide search and native result touch", result_touch)
+        try:
+            webdriver("DELETE",base,timeout=3)
+        except (RuntimeError,OSError):
+            pass
     finally:
         driver.terminate()
         driver.wait(timeout=10)
