@@ -309,7 +309,7 @@ class Journeys(unittest.TestCase):
             "https://DOCS.ONESA.EU.",
             "https://docs.onesa.eu:443",
         ):
-            with self.assertRaisesRegex(ValueError, "public Developer Docs"):
+            with self.assertRaisesRegex(ValueError, "public documents"):
                 create(dict(self.cfg, DOCS_ORIGIN=public))
         with self.assertRaisesRegex(ValueError, "dedicated internal origin"):
             create(dict(self.cfg, DOCS_ENVIRONMENT="production"))
@@ -362,7 +362,7 @@ class Journeys(unittest.TestCase):
             ).status_code,
             404,
         )
-        with self.assertRaisesRegex(ValueError, "redirect-only"):
+        with self.assertRaisesRegex(ValueError, "hostname is retired"):
             create(dict(self.cfg, DOCS_ORIGIN="https://docs.engineering.onesa.eu"))
 
     def test_unsafe_return_and_unsigned_input(self):
