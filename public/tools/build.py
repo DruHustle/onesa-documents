@@ -98,7 +98,10 @@ def build(output):
                 )
             links.append((slug, title, target.suffix))
         if links:
-            (stage / "publications" / "index.html").write_text(
+            index = stage / "publications" / "index.html"
+            if index.exists():
+                raise ValueError("Approved publication index collides with baseline")
+            index.write_text(
                 '<!doctype html><html lang="en"><title>Public documents</title><h1>Public documents</h1><ul>'
                 + "".join(
                     '<li><a href="/publications/'
