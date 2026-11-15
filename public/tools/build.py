@@ -46,6 +46,9 @@ def build(output):
                     or ".." in path.parts
                     or "\\" in name
                     or name.startswith(".")
+                    or name.endswith("/")
+                    or any(part in ("", ".") for part in name.split("/"))
+                    or path.as_posix() != name
                 ):
                     raise ValueError("Invalid public file path")
                 data = z.read(name)
