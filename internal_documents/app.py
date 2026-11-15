@@ -94,6 +94,26 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     directory = Path(cfg["DOCS_DATA"]).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     database = directory / "documents.sqlite"
+    # The private mount may disappear across a production restart. Never
+    # silently bootstrap a replacement empty catalog on the container disk:
+    # an empty store could look healthy while documents and ACLs are gone.
+    if environment == "production":
+        if not database.is_file() or database.stat().st_size == 0:
+            raise RuntimeError("Production Documents store missing; restore the private volume")
+        try:
+            with catalog.connection(database) as db:
+                existing = {
+                    row[0] for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                if not {
+                    "documents", "revisions", "grants",
+                    "objects", "attachments", "imports",
+                }.issubset(existing):
+                    raise RuntimeError("Production Documents schema missing; restore the private volume")
+        except sqlite3.Error as exc:
+            raise RuntimeError("Production Documents store invalid; restore the private volume") from exc
     catalog.initialize(database)
     keys = keys or Keys(issuer, directory, clock=clock)
     with catalog.connection(database) as db:
