@@ -71,5 +71,35 @@ class PublicIndexCollisionTest(unittest.TestCase):
                     builder.build(output)
             self.assertFalse(output.exists())
 
+    def test_duplicate_publication_slug_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "editions").mkdir()
+            (root / "source").mkdir()
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("index.html", b"public baseline")
+            payload = archive.getvalue()
+            digest = hashlib.sha256(payload).hexdigest()
+            (root / "editions" / (digest + ".part")).write_bytes(payload)
+            (root / "release.json").write_text(json.dumps({
+                "chunks": [digest],
+                "archive_sha256": digest,
+                "files": {"index.html": hashlib.sha256(b"public baseline").hexdigest()},
+            }))
+            publication = b"Approved text"
+            (root / "source" / "example.txt").write_bytes(publication)
+            entry = {
+                "slug": "example",
+                "format": "txt",
+                "title": "Example",
+                "sha256": hashlib.sha256(publication).hexdigest(),
+            }
+            (root / "publications.json").write_text(json.dumps([entry, entry]))
+            with patch.object(builder, "ROOT", root):
+                with self.assertRaisesRegex(ValueError, "Duplicate public publication slug"):
+                    builder.build(root / "dist")
+            self.assertFalse((root / "dist").exists())
+
 if __name__ == "__main__":
     unittest.main()
