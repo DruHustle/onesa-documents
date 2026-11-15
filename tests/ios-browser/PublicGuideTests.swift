@@ -2,24 +2,34 @@ import XCTest
 
 final class PublicGuideTests: XCTestCase {
     @MainActor func testTouchPublicSearchResult() throws {
+        continueAfterFailure = false
         let safari = XCUIApplication(bundleIdentifier: "com.apple.mobilesafari")
         safari.activate()
         let web = safari.webViews.firstMatch
         XCTAssertTrue(web.waitForExistence(timeout: 45))
-        let fields = web.textFields
-        let named = fields.matching(NSPredicate(format: "label CONTAINS[c] %@", "Search")).firstMatch
-        let input = named.waitForExistence(timeout: 20) ? named : fields.firstMatch
-        XCTAssertTrue(input.waitForExistence(timeout: 15), "The public page did not expose its search entry")
+
+        // The responsive navbar includes another search field in its collapsed sidebar.
+        // Bind each gesture to the field Safari can hit on the current viewport.
+        let fields = web.textFields.matching(NSPredicate(
+            format: "label CONTAINS[c] %@ OR placeholderValue CONTAINS[c] %@", "Search", "Search docs"
+        ))
+        func visibleField() -> XCUIElement? {
+            fields.allElementsBoundByIndex.first { $0.isHittable }
+        }
+        let deadline = Date().addingTimeInterval(30)
+        while visibleField() == nil && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        }
+        try XCTUnwrap(visibleField(), "The public page did not expose its visible search field").tap()
+
+        let input = try XCTUnwrap(visibleField(), "The visible search field disappeared after opening")
         input.tap()
-        // Opening the search overlay can replace the original input node.
-        // Resolve the visible field again and tap it to establish real iOS
-        // keyboard focus before typing; never inject a JS search value.
-        let focused = web.textFields.matching(NSPredicate(
-            format: "label CONTAINS[c] %@", "Search documentation"
-        )).firstMatch
-        XCTAssertTrue(focused.waitForExistence(timeout: 10), "Search field disappeared after opening the overlay")
-        focused.tap()
-        focused.typeText("quickstart")
+        input.typeText("quickstart")
+        let typed = XCTNSPredicateExpectation(
+            predicate: NSPredicate(format: "value == %@", "quickstart"), object: input
+        )
+        XCTAssertEqual(XCTWaiter.wait(for: [typed], timeout: 10), .completed,
+                       "The real iPhone keyboard did not enter the expected search")
         let result = web.links.matching(NSPredicate(format: "label CONTAINS[c] %@", "Developer quickstart")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 35), "The public search did not return the guide")
         print("PUBLIC_GUIDE_NATIVE_SEARCH_RESULT_FOUND")
