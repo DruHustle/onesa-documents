@@ -303,6 +303,34 @@ class Journeys(unittest.TestCase):
                 1,
             )
 
+    def test_null_permission_grant_never_authorizes_and_import_rolls_back(self):
+        from copy import deepcopy
+
+        # Older SQLite schema accepted NULL through CHECK(permission IN ...).
+        # Merely joining on principal previously granted read access.
+        with catalog.connection(self.database) as db:
+            db.execute("UPDATE grants SET permission=NULL WHERE principal=?", (MEMBER,))
+        reader = self.bearer(MEMBER)
+        self.assertEqual(self.client.get("/api/documents", headers=reader).json(), [])
+        self.assertEqual(self.client.get("/api/documents/old-42", headers=reader).status_code, 404)
+        self.assertEqual(self.client.get(BOOKMARK, headers=reader).status_code, 404)
+        self.assertEqual(self.client.get("/api/attachments/drawing42", headers=reader).status_code, 404)
+        self.assertEqual(self.client.get("/api/documents/old-42", headers=self.bearer(EDITOR)).status_code, 200)
+
+        # An owner-approved import must reject invalid permissions atomically,
+        # rather than trusting SQLite's CHECK constraint with NULL.
+        new = deepcopy(self.batch["documents"][0])
+        new["id"] = "bad-grant-copy"
+        new["bookmark"] = "/docs/permissions/check"
+        new["revisions"][0]["attachments"][0]["id"] = "grant-check-attachment"
+        new["grants"][1]["permission"] = None
+        self.batch["documents"] = [new]
+        with self.assertRaisesRegex(ValueError, "Invalid document permission"):
+            self.upload()
+        with catalog.connection(self.database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM documents").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM imports").fetchone()[0], 1)
+
     def test_editor_draft_vs_reader(self):
         payload = {
             "base_revision": "02",
