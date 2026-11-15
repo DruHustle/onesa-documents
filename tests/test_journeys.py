@@ -222,6 +222,33 @@ class Journeys(unittest.TestCase):
         self.database.symlink_to(external)
         self.assertEqual(self.client.get("/readyz").status_code, 503)
 
+    def test_readiness_rejects_database_with_missing_required_columns(self):
+        # SELECT 1 FROM <table> succeeds even when production queries need
+        # columns that are absent. Readiness must validate the actual schema.
+        with catalog.connection(self.database) as db:
+            db.execute("DROP TABLE grants")
+            db.execute("CREATE TABLE grants(id TEXT)")
+        self.assertEqual(self.client.get("/readyz").status_code, 503)
+
+    def test_production_startup_rejects_tables_with_incomplete_columns(self):
+        # A restored database can contain every expected table name but an
+        # incompatible schema. Do not start and serve requests that will fail.
+        root = self.root / "malformed-production-volume"
+        root.mkdir()
+        database = root / "documents.sqlite"
+        with catalog.connection(database) as db:
+            for table in ("documents", "revisions", "grants", "objects", "attachments", "imports"):
+                db.execute(f"CREATE TABLE {table}(id TEXT)")
+        config = dict(
+            self.cfg,
+            DOCS_ENVIRONMENT="production",
+            DOCS_ORIGIN="https://docs.internal.onesa.eu",
+            DOCS_ISSUER="https://auth.onesa.eu",
+            DOCS_DATA=str(root),
+        )
+        with self.assertRaisesRegex(RuntimeError, "schema invalid"):
+            create(config)
+
     def test_import_cli_secures_existing_private_volume_and_database(self):
         directory = self.root / "cli-private-volume"
         directory.mkdir()
