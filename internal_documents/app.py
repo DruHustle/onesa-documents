@@ -293,6 +293,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
 
     def load_doc(request, uid, k, bookmark=False):
         with catalog.connection(database) as db:
+            db.execute("BEGIN")
             result = catalog.document(
                 db, uid, k, bookmark, request.state.engineering_only
             )
@@ -303,6 +304,10 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     @app.get("/api/documents/{key}")
     def metadata(request: Request, key: str):
         return load_doc(request, identity(request), key)
+
+    @app.get("/api/documents/{key}/revisions")
+    def revisions(request: Request, key: str):
+        return load_doc(request, identity(request), key)["revisions"]
 
     @app.get("/api/attachments/{key}")
     def attachment(request: Request, key: str):
@@ -482,6 +487,13 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         if isinstance(uid, Response):
             return uid
         rec = load_doc(request, uid, "/docs/" + bookmark, True)
+        history = "".join(
+            "<li>Revision " + html.escape(revision["id"])
+            + (" (current)" if revision["id"] == rec["revision"] else "")
+            + "<small>" + html.escape(revision["created"]) + " · "
+            + html.escape(revision["author"]) + "</small></li>"
+            for revision in rec["revisions"]
+        )
         links = "".join(
             '<li><a href="/api/attachments/'
             + quote(a["id"], safe="")
@@ -532,7 +544,9 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             + provenance
             + "<ul>"
             + links
-            + "</ul></article>"
+            + "</ul><details><summary>Approved revision history</summary><ol>"
+            + history
+            + "</ol></details></article>"
             + editor,
         )
 
