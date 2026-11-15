@@ -49,6 +49,30 @@ class PublicPackValidation(unittest.TestCase):
                     packer.pack(source, approval, "approved-deployment", "a" * 40)
             self.assertFalse((root / "release.json").exists())
 
+    def test_pack_rejects_symlinked_public_file_and_directory(self):
+        for directory_link in (False, True):
+            with self.subTest(directory_link=directory_link), tempfile.TemporaryDirectory() as temp:
+                root = Path(temp)
+                source, approval, _, body = self.fixture(root)
+                public_dir = source / "docs" / "public"
+                public_file = public_dir / "guide.txt"
+                private_dir = source / "private"
+                private_dir.mkdir()
+                private_file = private_dir / "guide.txt"
+                private_file.write_bytes(body)
+                if directory_link:
+                    public_file.unlink()
+                    public_dir.rmdir()
+                    public_dir.symlink_to(private_dir, target_is_directory=True)
+                else:
+                    public_file.unlink()
+                    public_file.symlink_to(private_file)
+                with patch.object(packer, "ROOT", root):
+                    with self.assertRaisesRegex(ValueError, "symlink"):
+                        packer.pack(source, approval, "approved-deployment", "a" * 40)
+                self.assertFalse((root / "release.json").exists())
+                self.assertEqual(list((root / "editions").iterdir()), [])
+
     def test_canonical_approved_source_produces_digest_pinned_release(self):
         with tempfile.TemporaryDirectory() as temp:
             root = Path(temp)
