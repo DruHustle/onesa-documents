@@ -171,6 +171,15 @@ class Journeys(unittest.TestCase):
         self.assertEqual(response.status_code, 503)
         self.assertFalse(self.database.exists())
 
+    def test_search_bounds_query_length_on_api_and_html_surfaces(self):
+        headers = self.bearer(MEMBER)
+        query = "x" * 257
+        api = self.client.get("/api/documents", params={"q": query}, headers=headers)
+        self.assertEqual(api.status_code, 422)
+        self.assertEqual(api.json()["detail"], "Search query too long")
+        page = self.client.get("/", params={"q": query}, headers=headers)
+        self.assertEqual(page.status_code, 422)
+
     def test_portal_offline_bookmark_and_session(self):
         target = BOOKMARK + "?view=spec"
         cb = self.initiate(target)
