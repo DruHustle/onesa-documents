@@ -173,9 +173,14 @@ def import_snapshot(path, manifest, digest):
                     )
                     totals["attachments"] += 1
             for grant in doc["grants"]:
+                # SQLite CHECK permits NULL unless explicitly NOT NULL.
+                # Reject an absent permission before importing any ACL row.
+                permission = grant["permission"]
+                if permission not in ("read", "edit"):
+                    raise ValueError("Invalid document permission")
                 db.execute(
                     "INSERT INTO grants VALUES(?,?,?)",
-                    (did, str(UUID(grant["user_id"])), grant["permission"]),
+                    (did, str(UUID(grant["user_id"])), permission),
                 )
                 totals["grants"] += 1
         if totals != batch["expected_counts"]:
@@ -184,7 +189,7 @@ def import_snapshot(path, manifest, digest):
     return totals
 
 
-JOIN = """ FROM documents d JOIN grants g ON g.document=d.id
+JOIN = """ FROM documents d JOIN grants g ON g.document=d.id AND g.permission IN ('read','edit')
 JOIN revisions r ON r.document=d.id AND r.id=d.current AND r.approved=1 """
 FIELDS = "d.id,d.collection,d.product,d.discipline,d.bookmark,d.author,r.title,r.id AS revision,g.permission"
 
@@ -239,6 +244,6 @@ def attachment(db, uid, key, engineering_only=False):
     return db.execute(
         """SELECT a.name,o.bytes FROM attachments a JOIN objects o ON a.digest=o.digest
         JOIN revisions r ON a.document=r.document AND a.revision=r.id AND r.approved=1
-        JOIN documents d ON d.id=a.document AND d.current=a.revision JOIN grants g ON g.document=a.document WHERE g.principal=? AND (?=0 OR d.collection='engineering') AND a.id=?""",
+        JOIN documents d ON d.id=a.document AND d.current=a.revision JOIN grants g ON g.document=a.document AND g.permission IN ('read','edit') WHERE g.principal=? AND (?=0 OR d.collection='engineering') AND a.id=?""",
         (uid, engineering_only, key),
     ).fetchone()
