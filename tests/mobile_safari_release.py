@@ -206,10 +206,12 @@ print((request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.j
                     command("xcrun","simctl","io",udid,"screenshot",path)
                     return command(reader,path).lower()
                 before = read_screen()
+                before_url = urlsplit(run("GET", "/url"))
+                results_visible = js("""const e=document.querySelector('[aria-label="Search results"]'); return !!e && e.getClientRects().length > 0""")
                 print("Before touch, Apple Vision from the simulator display:", before[:680], flush=True)
-                guide_markers = ("docker-only application startup", "docker-only", "git clone", "cd onesa-ai-platform", "all commands below run", "reproducible review", "compose v2", "python3 scripts/bootstrap")
-                if any(marker in before for marker in guide_markers):
-                    return {"passed": False, "reason": "homepage precondition still shows guide content", "result": target}
+                guide_markers = ("docker-only application startup", "docker-only", "cd onesa-ai-platform", "compose v2", "python3 scripts/bootstrap")
+                if before_url.hostname != "docs.onesa.eu" or before_url.path not in ("/", "/index.html") or not results_visible:
+                    return {"passed": False, "reason": "homepage search-results precondition not confirmed", "url": before_url.geturl(), "result": target}
                 payload = {"actions":[{"type":"pointer","id":"finger","parameters":{"pointerType":"touch"},"actions":[
                     {"type":"pointerMove","duration":0,"origin":"viewport","x":point["x"],"y":point["y"]},
                     {"type":"pointerDown","button":0},{"type":"pause","duration":100},{"type":"pointerUp","button":0}]}]}
@@ -224,12 +226,14 @@ print((request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.j
                         # the closed and open search overlays on the homepage.
                         try:
                             after_url = urlsplit(run("GET", "/url"))
+                            guide_state = js("""const body=document.body.innerText.toLowerCase(); const overlay=document.querySelector('[aria-label="Search results"]'); return {heading:[...document.querySelectorAll('h1,h2')].some(e=>e.innerText.toLowerCase().includes('developer quickstart')), section:body.includes('docker-only application startup'), overlayVisible:!!overlay && overlay.getClientRects().length>0}""")
                         except (OSError, RuntimeError):
-                            after_url = None
+                            after_url, guide_state = None, {}
                         changed_to_guide = after_url is not None and after_url.hostname == "docs.onesa.eu" and after_url.path == "/docs/public/quickstart"
                         unique_guide_content = any(marker in after and marker not in before for marker in guide_markers)
-                        if "developer quickstart" in after and (changed_to_guide or unique_guide_content):
-                            return {"passed":True,"activation":"native Safari touch; independent display OCR","url":after_url.geturl() if after_url else None,"result":target}
+                        page_confirmed = guide_state.get("heading") and guide_state.get("section") and not guide_state.get("overlayVisible")
+                        if changed_to_guide and (page_confirmed or unique_guide_content):
+                            return {"passed":True,"activation":"native Safari touch; destination URL and independent screen/DOM verification","url":after_url.geturl(),"result":target}
                     try:
                         touch.result()
                     except (OSError, RuntimeError) as error:
