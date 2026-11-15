@@ -211,6 +211,38 @@ class Journeys(unittest.TestCase):
             401,
         )
 
+    def test_readers_can_review_approved_revision_history_with_current_permissions(self):
+        with catalog.connection(self.database) as db:
+            db.executemany(
+                "INSERT INTO revisions VALUES(?,?,?,?,?,?,?,?)",
+                [
+                    ("old-42", "01", EDITOR, "2026-09-01", "Former title", "Retired text", "", 1),
+                    ("old-42", "draft-secret", EDITOR, "2026-11-01", "Draft", "Private draft", "", 0),
+                ],
+            )
+        url = "/api/documents/old-42/revisions"
+        expected = [
+            {"id": "02", "author": EDITOR, "created": "2026-10-15T08:00:00Z"},
+            {"id": "01", "author": EDITOR, "created": "2026-09-01"},
+        ]
+        response = self.client.get(url, headers=self.bearer())
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.json(), expected)
+        preview = self.client.get(BOOKMARK, headers=self.bearer()).text
+        self.assertIn("Approved revision history", preview)
+        self.assertIn("2026-09-01", preview)
+        self.assertNotIn("draft-secret", preview)
+        self.assertNotIn("Retired text", preview)
+        self.assertEqual(self.client.get(url).status_code, 401)
+        self.assertEqual(self.client.get(url, headers=self.bearer(PORTAL)).status_code, 404)
+        with catalog.connection(self.database) as db:
+            db.execute("UPDATE documents SET collection='hr' WHERE id='old-42'")
+        self.assertEqual(self.client.get(url, headers=self.bearer(products=["engineering-documents"])).status_code, 404)
+        self.assertEqual(self.client.get(url, headers=self.bearer()).json(), expected)
+        with catalog.connection(self.database) as db:
+            db.execute("DELETE FROM grants WHERE principal=?", (MEMBER,))
+        self.assertEqual(self.client.get(url, headers=self.bearer()).status_code, 404)
+
     def test_superseded_revision_attachment_is_not_downloadable(self):
         # The current document's readers must not gain access to objects
         # withdrawn from an earlier approved revision. Preserve the object

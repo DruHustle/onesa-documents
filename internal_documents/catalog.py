@@ -217,6 +217,14 @@ def document(db, uid, key, bookmark=False, engineering_only=False):
     if not row:
         return None
     result = dict(row)
+    result["revisions"] = [
+        dict(revision)
+        for revision in db.execute(
+            """SELECT id,author,created FROM revisions WHERE document=? AND approved=1
+               ORDER BY (id=?) DESC, julianday(created) DESC, id DESC""",
+            (result["id"], result["revision"]),
+        )
+    ]
     result["attachments"] = [
         dict(row)
         for row in db.execute(
