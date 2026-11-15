@@ -1,8 +1,10 @@
 import base64
 import hashlib
 import html
+import json
 import os
 import secrets
+import sqlite3
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
@@ -67,11 +69,20 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         raise ValueError("docs.onesa.eu is reserved for public documents")
     if urlsplit(origin).hostname.rstrip(".").lower() == "docs.engineering.onesa.eu":
         raise ValueError("The legacy engineering hostname is retired")
-    if cfg.get("DOCS_ENVIRONMENT") == "production" and (
+    # An unset or mistyped environment must not silently disable production
+    # origin/issuer restrictions. Only explicit staging enables nonproduction URLs.
+    environment = cfg.get("DOCS_ENVIRONMENT", "production")
+    if environment not in ("production", "staging"):
+        raise ValueError("DOCS_ENVIRONMENT must be production or staging")
+    if environment == "production" and (
         origin != "https://docs.internal.onesa.eu" or issuer != "https://auth.onesa.eu/"
     ):
         raise ValueError(
             "Production Internal Documents requires the dedicated internal origin and Onesa Identity issuer"
+        )
+    if environment == "staging" and urlsplit(origin).hostname.rstrip(".").lower() == "docs.internal.onesa.eu":
+        raise ValueError(
+            "Staging Internal Documents must use a separate nonproduction hostname"
         )
     audience = cfg["DOCS_AUDIENCE"]
     client = cfg["DOCS_CLIENT_ID"]
@@ -83,6 +94,26 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     directory = Path(cfg["DOCS_DATA"]).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
     database = directory / "documents.sqlite"
+    # The private mount may disappear across a production restart. Never
+    # silently bootstrap a replacement empty catalog on the container disk:
+    # an empty store could look healthy while documents and ACLs are gone.
+    if environment == "production":
+        if not database.is_file() or database.stat().st_size == 0:
+            raise RuntimeError("Production Documents store missing; restore the private volume")
+        try:
+            with catalog.connection(database) as db:
+                existing = {
+                    row[0] for row in db.execute(
+                        "SELECT name FROM sqlite_master WHERE type='table'"
+                    )
+                }
+                if not {
+                    "documents", "revisions", "grants",
+                    "objects", "attachments", "imports",
+                }.issubset(existing):
+                    raise RuntimeError("Production Documents schema missing; restore the private volume")
+        except sqlite3.Error as exc:
+            raise RuntimeError("Production Documents store invalid; restore the private volume") from exc
     catalog.initialize(database)
     keys = keys or Keys(issuer, directory, clock=clock)
     with catalog.connection(database) as db:
@@ -161,6 +192,26 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     @app.get("/healthz")
     def health():
         return {"service": "internal-documents"}
+
+    @app.get("/readyz")
+    def readiness():
+        # Liveness must stay independent from the private store. Readiness,
+        # however, must fail if a persistent volume disappears or SQLite is
+        # unavailable; never let SQLite silently create an empty replacement.
+        if not database.is_file():
+            raise HTTPException(503, "Document store unavailable")
+        try:
+            with catalog.connection(database) as db:
+                for table in (
+                    "documents", "revisions", "grants", "objects",
+                    "attachments", "imports", "challenges", "sessions",
+                ):
+                    db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+                db.execute("BEGIN IMMEDIATE")
+                db.rollback()
+        except sqlite3.Error:
+            raise HTTPException(503, "Document store unavailable")
+        return {"service": "internal-documents", "ready": True}
 
     @app.get("/sign-in")
     def sign_in(next: str = "/"):
@@ -284,14 +335,21 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         )
         return result
 
+    def bounded_search_query(query):
+        if len(query) > 256:
+            raise HTTPException(422, "Search query too long")
+        return query
+
     @app.get("/api/documents")
     def find(request: Request, q: str = ""):
         uid = identity(request)
+        q = bounded_search_query(q)
         with catalog.connection(database) as db:
             return catalog.search(db, uid, q, request.state.engineering_only)
 
     def load_doc(request, uid, k, bookmark=False):
         with catalog.connection(database) as db:
+            db.execute("BEGIN")
             result = catalog.document(
                 db, uid, k, bookmark, request.state.engineering_only
             )
@@ -302,6 +360,10 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     @app.get("/api/documents/{key}")
     def metadata(request: Request, key: str):
         return load_doc(request, identity(request), key)
+
+    @app.get("/api/documents/{key}/revisions")
+    def revisions(request: Request, key: str):
+        return load_doc(request, identity(request), key)["revisions"]
 
     @app.get("/api/attachments/{key}")
     def attachment(request: Request, key: str):
@@ -349,7 +411,29 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             return {"id": rid, "document": key, "approved": False}
 
     @app.post("/api/documents/{key}/drafts", status_code=201)
-    def draft(request: Request, key: str, payload: Draft):
+    async def draft(request: Request, key: str):
+        # Authenticate before reading untrusted JSON; FastAPI's automatic body
+        # parsing would otherwise buffer an unlimited anonymous request.
+        if (
+            not request.headers.get("authorization")
+            and request.headers.get("origin") != origin
+        ):
+            raise HTTPException(403, "Invalid Origin")
+        identity(request)
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            raise HTTPException(415, "Expected JSON")
+        chunks = bytearray()
+        async for chunk in request.stream():
+            if len(chunks) + len(chunk) > 2_100_000:
+                raise HTTPException(413, "Draft too large")
+            chunks.extend(chunk)
+        try:
+            data = json.loads(bytes(chunks))
+            if not isinstance(data, dict):
+                raise ValueError("Draft must be an object")
+            payload = Draft(**data)
+        except (ValueError, TypeError):
+            raise HTTPException(422, "Invalid draft")
         return store_draft(request, key, payload)
 
     @app.post("/edit/{key}")
@@ -366,8 +450,11 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             if len(chunks) + len(chunk) > 2_100_000:
                 raise HTTPException(413, "Draft too large")
             chunks.extend(chunk)
-        form = parse_qs(chunks.decode(), max_num_fields=3, keep_blank_values=True)
         try:
+            form = parse_qs(
+                chunks.decode("utf-8"), max_num_fields=3, keep_blank_values=True,
+                errors="strict",
+            )
             payload = Draft(
                 **{k: form[k][0] for k in ("base_revision", "title", "body")}
             )
@@ -423,6 +510,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         uid = web_identity(request)
         if isinstance(uid, Response):
             return uid
+        q = bounded_search_query(q)
         with catalog.connection(database) as db:
             rows = catalog.search(db, uid, q, request.state.engineering_only)
         entries = "".join(
@@ -439,7 +527,8 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         )
         return page(
             "Internal Documents",
-            '<h1>Internal Documents</h1><form><label>Search documents <input name="q" value="'
+            '<h1>Internal Documents</h1><form method="post" action="/logout"><button>Sign out</button></form>'
+            '<form><label>Search documents <input name="q" value="'
             + html.escape(q, quote=True)
             + '"></label><button>Search</button></form>'
             + (
@@ -455,6 +544,13 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         if isinstance(uid, Response):
             return uid
         rec = load_doc(request, uid, "/docs/" + bookmark, True)
+        history = "".join(
+            "<li>Revision " + html.escape(revision["id"])
+            + (" (current)" if revision["id"] == rec["revision"] else "")
+            + "<small>" + html.escape(revision["created"]) + " · "
+            + html.escape(revision["author"]) + "</small></li>"
+            for revision in rec["revisions"]
+        )
         links = "".join(
             '<li><a href="/api/attachments/'
             + quote(a["id"], safe="")
@@ -505,7 +601,9 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             + provenance
             + "<ul>"
             + links
-            + "</ul></article>"
+            + "</ul><details><summary>Approved revision history</summary><ol>"
+            + history
+            + "</ol></details></article>"
             + editor,
         )
 

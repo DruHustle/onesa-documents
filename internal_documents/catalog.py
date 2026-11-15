@@ -123,7 +123,7 @@ def import_snapshot(path, manifest, digest):
                         or u.password
                     ):
                         raise ValueError("Invalid provenance URL")
-                    if u.hostname == "github.com" and not re.search(
+                    if u.hostname.rstrip(".") in ("github.com", "www.github.com") and not re.search(
                         "/(?:blob|tree|commit)/[a-f0-9]{40}(?:/|$)", u.path
                     ):
                         raise ValueError("Git provenance must name an immutable commit")
@@ -151,9 +151,16 @@ def import_snapshot(path, manifest, digest):
                     content = obj.read_bytes()
                     if hashlib.sha256(content).hexdigest() != sha:
                         raise ValueError("Attachment checksum mismatch")
-                    db.execute(
-                        "INSERT OR IGNORE INTO objects VALUES(?,?)", (sha, content)
-                    )
+                    existing = db.execute(
+                        "SELECT bytes FROM objects WHERE digest=?", (sha,)
+                    ).fetchone()
+                    if existing is not None:
+                        if existing["bytes"] != content:
+                            raise ValueError("Existing attachment object checksum mismatch")
+                    else:
+                        db.execute(
+                            "INSERT INTO objects VALUES(?,?)", (sha, content)
+                        )
                     db.execute(
                         "INSERT INTO attachments VALUES(?,?,?,?,?)",
                         (
@@ -166,9 +173,14 @@ def import_snapshot(path, manifest, digest):
                     )
                     totals["attachments"] += 1
             for grant in doc["grants"]:
+                # SQLite CHECK permits NULL unless explicitly NOT NULL.
+                # Reject an absent permission before importing any ACL row.
+                permission = grant["permission"]
+                if permission not in ("read", "edit"):
+                    raise ValueError("Invalid document permission")
                 db.execute(
                     "INSERT INTO grants VALUES(?,?,?)",
-                    (did, str(UUID(grant["user_id"])), grant["permission"]),
+                    (did, str(UUID(grant["user_id"])), permission),
                 )
                 totals["grants"] += 1
         if totals != batch["expected_counts"]:
@@ -177,7 +189,7 @@ def import_snapshot(path, manifest, digest):
     return totals
 
 
-JOIN = """ FROM documents d JOIN grants g ON g.document=d.id
+JOIN = """ FROM documents d JOIN grants g ON g.document=d.id AND g.permission IN ('read','edit')
 JOIN revisions r ON r.document=d.id AND r.id=d.current AND r.approved=1 """
 FIELDS = "d.id,d.collection,d.product,d.discipline,d.bookmark,d.author,r.title,r.id AS revision,g.permission"
 
@@ -210,6 +222,14 @@ def document(db, uid, key, bookmark=False, engineering_only=False):
     if not row:
         return None
     result = dict(row)
+    result["revisions"] = [
+        dict(revision)
+        for revision in db.execute(
+            """SELECT id,author,created FROM revisions WHERE document=? AND approved=1
+               ORDER BY (id=?) DESC, julianday(created) DESC, id DESC""",
+            (result["id"], result["revision"]),
+        )
+    ]
     result["attachments"] = [
         dict(row)
         for row in db.execute(
@@ -224,6 +244,6 @@ def attachment(db, uid, key, engineering_only=False):
     return db.execute(
         """SELECT a.name,o.bytes FROM attachments a JOIN objects o ON a.digest=o.digest
         JOIN revisions r ON a.document=r.document AND a.revision=r.id AND r.approved=1
-        JOIN documents d ON d.id=a.document JOIN grants g ON g.document=a.document WHERE g.principal=? AND (?=0 OR d.collection='engineering') AND a.id=?""",
+        JOIN documents d ON d.id=a.document AND d.current=a.revision JOIN grants g ON g.document=a.document AND g.permission IN ('read','edit') WHERE g.principal=? AND (?=0 OR d.collection='engineering') AND a.id=?""",
         (uid, engineering_only, key),
     ).fetchone()
