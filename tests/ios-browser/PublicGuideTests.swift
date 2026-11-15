@@ -11,7 +11,15 @@ final class PublicGuideTests: XCTestCase {
         let input = named.waitForExistence(timeout: 20) ? named : fields.firstMatch
         XCTAssertTrue(input.waitForExistence(timeout: 15), "The public page did not expose its search entry")
         input.tap()
-        input.typeText("quickstart")
+        // Opening the search overlay can replace the original input node.
+        // Resolve the visible field again and tap it to establish real iOS
+        // keyboard focus before typing; never inject a JS search value.
+        let focused = web.textFields.matching(NSPredicate(
+            format: "label CONTAINS[c] %@", "Search documentation"
+        )).firstMatch
+        XCTAssertTrue(focused.waitForExistence(timeout: 10), "Search field disappeared after opening the overlay")
+        focused.tap()
+        focused.typeText("quickstart")
         let result = web.links.matching(NSPredicate(format: "label CONTAINS[c] %@", "Developer quickstart")).firstMatch
         XCTAssertTrue(result.waitForExistence(timeout: 35), "The public search did not return the guide")
         print("PUBLIC_GUIDE_NATIVE_SEARCH_RESULT_FOUND")
