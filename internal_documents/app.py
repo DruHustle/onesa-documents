@@ -28,7 +28,10 @@ def hash_value(value):
 
 
 def safe_destination(value):
-    u = urlsplit(value)
+    try:
+        u = urlsplit(value)
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid document return address") from exc
     if (
         u.scheme
         or u.netloc
@@ -163,9 +166,10 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         auth = request.headers.get("authorization", "")
         token = None
         if auth:
-            if not auth.startswith("Bearer "):
+            scheme, separator, credential = auth.partition(" ")
+            if not separator or scheme.casefold() != "bearer" or not credential.strip():
                 raise HTTPException(401, "Bearer token required")
-            token = auth[7:]
+            token = credential.strip()
         else:
             with catalog.connection(database) as db:
                 s = db.execute(
@@ -471,7 +475,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         if request.headers.get("origin") != origin:
             raise HTTPException(403, "Invalid Origin")
         if (
-            request.headers.get("content-type", "").split(";")[0]
+            request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             != "application/x-www-form-urlencoded"
         ):
             raise HTTPException(415, "Expected form data")
@@ -483,7 +487,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         try:
             form = parse_qs(
                 chunks.decode("utf-8"), max_num_fields=3, keep_blank_values=True,
-                errors="strict",
+                strict_parsing=True, errors="strict",
             )
             payload = Draft(
                 **{k: form[k][0] for k in ("base_revision", "title", "body")}
