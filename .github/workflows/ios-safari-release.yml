@@ -1,6 +1,9 @@
 name: Verify published Web journeys on iOS Safari
 on:
   workflow_dispatch:
+  push:
+    branches:
+      - test/mobile-safari-public-experiences
   pull_request:
     paths:
       - .github/workflows/ios-safari-release.yml
