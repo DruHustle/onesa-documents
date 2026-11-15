@@ -140,6 +140,10 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             state TEXT PRIMARY KEY,binding TEXT NOT NULL,verifier TEXT NOT NULL, nonce TEXT NOT NULL,
             destination TEXT NOT NULL,expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,access_token TEXT NOT NULL,expires INTEGER NOT NULL);""")
+        try:
+            catalog.verify_schema(db)
+        except sqlite3.DatabaseError as exc:
+            raise RuntimeError("Private Documents schema invalid; restore the private volume") from exc
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
@@ -221,11 +225,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             raise HTTPException(503, "Document store unavailable")
         try:
             with catalog.connection(database) as db:
-                for table in (
-                    "documents", "revisions", "grants", "objects",
-                    "attachments", "imports", "challenges", "sessions",
-                ):
-                    db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+                catalog.verify_schema(db)
                 db.execute("BEGIN IMMEDIATE")
                 db.rollback()
         except sqlite3.Error:
