@@ -315,6 +315,17 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             if not code:
                 return page("Sign-in interrupted", retry)
             tokens = (exchange or get_tokens)(code, tx["verifier"])
+            # Treat malformed upstream JSON exactly like an unavailable token
+            # response. A non-object (or non-string token fields) previously
+            # raised TypeError here and escaped the outage response as HTTP 500.
+            if (
+                not isinstance(tokens, dict)
+                or not isinstance(tokens.get("id_token"), str)
+                or not tokens["id_token"]
+                or not isinstance(tokens.get("access_token"), str)
+                or not tokens["access_token"]
+            ):
+                raise ValueError("Invalid OIDC token response")
             profile = keys.verify(tokens["id_token"], client)
             access = keys.verify(tokens["access_token"], audience)
             if (
