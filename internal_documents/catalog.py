@@ -123,7 +123,7 @@ def import_snapshot(path, manifest, digest):
                         or u.password
                     ):
                         raise ValueError("Invalid provenance URL")
-                    if u.hostname == "github.com" and not re.search(
+                    if u.hostname.rstrip(".") in ("github.com", "www.github.com") and not re.search(
                         "/(?:blob|tree|commit)/[a-f0-9]{40}(?:/|$)", u.path
                     ):
                         raise ValueError("Git provenance must name an immutable commit")
