@@ -20,6 +20,16 @@ class ReleaseDefaults(unittest.TestCase):
         self.assertIn("HEALTHCHECK", dockerfile)
         self.assertIn("/readyz", dockerfile)
 
+    def test_private_import_material_is_excluded_from_source_and_build_context(self):
+        gitignore = (ROOT / ".gitignore").read_text().splitlines()
+        dockerignore = (ROOT / ".dockerignore").read_text().splitlines()
+        for pattern in ("objects/", "manifest*.json", "backups/"):
+            self.assertIn(pattern, gitignore)
+        for pattern in ("objects", "manifest*.json", "backups"):
+            self.assertIn(pattern, dockerignore)
+        self.assertIn("*.sqlite-wal", gitignore)
+        self.assertIn("*.sqlite-shm", gitignore)
+
     def test_verification_runs_after_main_merges(self):
         workflow = (ROOT / ".github/workflows/verify.yml").read_text()
         self.assertIn("  pull_request:\n", workflow)
