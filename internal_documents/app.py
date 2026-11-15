@@ -315,9 +315,15 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         )
         return result
 
+    def bounded_search_query(query):
+        if len(query) > 256:
+            raise HTTPException(422, "Search query too long")
+        return query
+
     @app.get("/api/documents")
     def find(request: Request, q: str = ""):
         uid = identity(request)
+        q = bounded_search_query(q)
         with catalog.connection(database) as db:
             return catalog.search(db, uid, q, request.state.engineering_only)
 
@@ -484,6 +490,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         uid = web_identity(request)
         if isinstance(uid, Response):
             return uid
+        q = bounded_search_query(q)
         with catalog.connection(database) as db:
             rows = catalog.search(db, uid, q, request.state.engineering_only)
         entries = "".join(
