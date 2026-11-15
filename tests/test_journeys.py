@@ -276,6 +276,34 @@ class Journeys(unittest.TestCase):
             409,
         )
 
+    def test_draft_json_authentication_and_body_limit_precede_parse(self):
+        route = "/api/documents/old-42/drafts"
+        large = b" " * 2_100_001
+        anonymous = self.client.post(
+            route,
+            content=large,
+            headers={"Content-Type": "application/json", "Origin": WEB},
+        )
+        self.assertEqual(anonymous.status_code, 401)
+        signed = self.client.post(
+            route,
+            content=large,
+            headers={**self.bearer(EDITOR), "Content-Type": "application/json"},
+        )
+        self.assertEqual(signed.status_code, 413)
+        malformed = self.client.post(
+            route,
+            content=b"{not valid json}",
+            headers={**self.bearer(EDITOR), "Content-Type": "application/json"},
+        )
+        self.assertEqual(malformed.status_code, 422)
+        unsupported = self.client.post(
+            route,
+            content=b"plain",
+            headers={**self.bearer(EDITOR), "Content-Type": "text/plain"},
+        )
+        self.assertEqual(unsupported.status_code, 415)
+
     def test_issuer_outage_restart_expiry_return(self):
         headers = self.bearer()
         self.assertEqual(

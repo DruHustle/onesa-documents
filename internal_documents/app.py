@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import html
+import json
 import os
 import secrets
 import time
@@ -349,7 +350,29 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             return {"id": rid, "document": key, "approved": False}
 
     @app.post("/api/documents/{key}/drafts", status_code=201)
-    def draft(request: Request, key: str, payload: Draft):
+    async def draft(request: Request, key: str):
+        # Authenticate before reading untrusted JSON; FastAPI's automatic body
+        # parsing would otherwise buffer an unlimited anonymous request.
+        if (
+            not request.headers.get("authorization")
+            and request.headers.get("origin") != origin
+        ):
+            raise HTTPException(403, "Invalid Origin")
+        identity(request)
+        if request.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
+            raise HTTPException(415, "Expected JSON")
+        chunks = bytearray()
+        async for chunk in request.stream():
+            if len(chunks) + len(chunk) > 2_100_000:
+                raise HTTPException(413, "Draft too large")
+            chunks.extend(chunk)
+        try:
+            data = json.loads(bytes(chunks))
+            if not isinstance(data, dict):
+                raise ValueError("Draft must be an object")
+            payload = Draft(**data)
+        except (ValueError, TypeError):
+            raise HTTPException(422, "Invalid draft")
         return store_draft(request, key, payload)
 
     @app.post("/edit/{key}")
