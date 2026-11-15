@@ -103,6 +103,8 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     except OSError as exc:
         raise RuntimeError("Cannot secure private Documents data directory") from exc
     database = directory / "documents.sqlite"
+    if database.is_symlink():
+        raise RuntimeError("Private Documents database must not be a symlink")
     # The private mount may disappear across a production restart. Never
     # silently bootstrap a replacement empty catalog on the container disk:
     # an empty store could look healthy while documents and ACLs are gone.
@@ -215,7 +217,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         # Liveness must stay independent from the private store. Readiness,
         # however, must fail if a persistent volume disappears or SQLite is
         # unavailable; never let SQLite silently create an empty replacement.
-        if not database.is_file():
+        if database.is_symlink() or not database.is_file():
             raise HTTPException(503, "Document store unavailable")
         try:
             with catalog.connection(database) as db:
