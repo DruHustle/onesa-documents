@@ -562,6 +562,17 @@ class Journeys(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "separate nonproduction hostname"):
             create(staging_on_production)
 
+        # A staging issuer must never take the production hostname using a
+        # DNS-equivalent trailing dot, case, or explicit default HTTPS port.
+        for equivalent in (
+            "https://docs.internal.onesa.eu.",
+            "https://DOCS.INTERNAL.ONESA.EU.:443",
+            "https://docs.internal.onesa.eu:443",
+        ):
+            with self.subTest(production_alias=equivalent):
+                with self.assertRaisesRegex(ValueError, "separate nonproduction hostname"):
+                    create(dict(self.cfg, DOCS_ORIGIN=equivalent))
+
     def test_permanent_public_and_internal_origins(self):
         for public in (
             "https://docs.onesa.eu",
