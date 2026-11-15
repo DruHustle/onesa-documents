@@ -224,6 +224,6 @@ def attachment(db, uid, key, engineering_only=False):
     return db.execute(
         """SELECT a.name,o.bytes FROM attachments a JOIN objects o ON a.digest=o.digest
         JOIN revisions r ON a.document=r.document AND a.revision=r.id AND r.approved=1
-        JOIN documents d ON d.id=a.document JOIN grants g ON g.document=a.document WHERE g.principal=? AND (?=0 OR d.collection='engineering') AND a.id=?""",
+        JOIN documents d ON d.id=a.document AND d.current=a.revision JOIN grants g ON g.document=a.document WHERE g.principal=? AND (?=0 OR d.collection='engineering') AND a.id=?""",
         (uid, engineering_only, key),
     ).fetchone()
