@@ -151,9 +151,16 @@ def import_snapshot(path, manifest, digest):
                     content = obj.read_bytes()
                     if hashlib.sha256(content).hexdigest() != sha:
                         raise ValueError("Attachment checksum mismatch")
-                    db.execute(
-                        "INSERT OR IGNORE INTO objects VALUES(?,?)", (sha, content)
-                    )
+                    existing = db.execute(
+                        "SELECT bytes FROM objects WHERE digest=?", (sha,)
+                    ).fetchone()
+                    if existing is not None:
+                        if existing["bytes"] != content:
+                            raise ValueError("Existing attachment object checksum mismatch")
+                    else:
+                        db.execute(
+                            "INSERT INTO objects VALUES(?,?)", (sha, content)
+                        )
                     db.execute(
                         "INSERT INTO attachments VALUES(?,?,?,?,?)",
                         (
