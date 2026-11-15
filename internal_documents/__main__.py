@@ -20,6 +20,11 @@ def run():
     database = args.database.resolve()
     directory = database.parent
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    if args.manifest.is_symlink():
+        raise RuntimeError("Private Documents manifest must not be a symlink")
+    manifest = args.manifest.resolve()
+    if not manifest.is_file() or not manifest.is_relative_to(directory):
+        raise RuntimeError("Private Documents manifest and objects must be inside DOCS_DATA")
     # The importer is a production entry point too: it must not create a
     # world-readable SQLite file before the web service has a chance to
     # enforce private storage permissions.
@@ -36,7 +41,7 @@ def run():
             raise OSError("private database remains accessible to group/other")
     except OSError as exc:
         raise RuntimeError("Cannot secure private Documents database") from exc
-    print(import_snapshot(database, args.manifest, args.sha256))
+    print(import_snapshot(database, manifest, args.sha256))
 
 
 if __name__ == "__main__":
