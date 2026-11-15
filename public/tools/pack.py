@@ -33,6 +33,10 @@ def pack(source, approval, deployment, revision):
         ):
             raise ValueError("Invalid or duplicate public source path")
         seen.add(name)
+    source_path = Path(source)
+    if source_path.is_symlink():
+        raise ValueError("Public source root must not be a symlink")
+    source_root = source_path.resolve()
     files = {}
     with tempfile.TemporaryFile() as raw:
         with zipfile.ZipFile(
@@ -40,9 +44,20 @@ def pack(source, approval, deployment, revision):
         ) as z:
             for row in sorted(manifest, key=lambda r: r["path"]):
                 name = row["path"]
-                path = (source / name).resolve()
+                # Check each lexical path component before resolving it.
+                # Resolving first would hide a symlink to another in-tree file
+                # (for example a private HR file) and could publish its bytes
+                # under an innocuous approved public path.
+                candidate = source_root / name
+                cursor = source_root
+                for part in PurePosixPath(name).parts:
+                    cursor = cursor / part
+                    if cursor.is_symlink():
+                        raise ValueError("Public source paths must not traverse symlinks")
+                path = candidate.resolve()
                 if (
-                    not path.is_relative_to(source.resolve())
+                    not path.is_relative_to(source_root)
+                    or not path.is_file()
                     or name.startswith(("/", "."))
                     or ".." in Path(name).parts
                     or "\\" in name
