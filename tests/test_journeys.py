@@ -842,9 +842,35 @@ class Journeys(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hostname is retired"):
             create(dict(self.cfg, DOCS_ORIGIN="https://docs.engineering.onesa.eu"))
 
+    def test_bearer_authentication_scheme_is_case_insensitive(self):
+        # HTTP authentication scheme names are case-insensitive. Mobile and
+        # third-party HTTP clients may legitimately send lowercase "bearer".
+        token = self.token(MEMBER)
+        for scheme in ("Bearer", "bearer", "BEARER"):
+            with self.subTest(scheme=scheme):
+                response = self.client.get(
+                    "/api/documents", headers={"Authorization": f"{scheme} {token}"}
+                )
+                self.assertEqual(response.status_code, 200)
+
+    def test_form_content_type_is_case_insensitive_and_rejects_malformed_fields(self):
+        headers = {
+            **self.bearer(EDITOR),
+            "Origin": WEB,
+            "Content-Type": "Application/X-WWW-Form-Urlencoded ; charset=UTF-8",
+        }
+        valid = b"base_revision=02&title=Drawing&body=accepted"
+        response = self.client.post("/edit/old-42", content=valid, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        malformed = self.client.post(
+            "/edit/old-42", content=valid + b"&unexpected", headers=headers
+        )
+        self.assertEqual(malformed.status_code, 422)
+
     def test_unsafe_return_and_unsigned_input(self):
         for val in [
             "https://other.test/a",
+            "https://[",
             "//other.test/a",
             "/docs/%2f%2fexternal",
             "/docs/a\\b",
