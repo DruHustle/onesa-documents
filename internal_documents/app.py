@@ -389,8 +389,11 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             if len(chunks) + len(chunk) > 2_100_000:
                 raise HTTPException(413, "Draft too large")
             chunks.extend(chunk)
-        form = parse_qs(chunks.decode(), max_num_fields=3, keep_blank_values=True)
         try:
+            form = parse_qs(
+                chunks.decode("utf-8"), max_num_fields=3, keep_blank_values=True,
+                errors="strict",
+            )
             payload = Draft(
                 **{k: form[k][0] for k in ("base_revision", "title", "body")}
             )
@@ -462,7 +465,8 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         )
         return page(
             "Internal Documents",
-            '<h1>Internal Documents</h1><form><label>Search documents <input name="q" value="'
+            '<h1>Internal Documents</h1><form method="post" action="/logout"><button>Sign out</button></form>'
+            '<form><label>Search documents <input name="q" value="'
             + html.escape(q, quote=True)
             + '"></label><button>Search</button></form>'
             + (
