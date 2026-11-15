@@ -440,6 +440,32 @@ class Journeys(unittest.TestCase):
                 db.execute("SELECT count(*) FROM imports").fetchone()[0], 1
             )
 
+    def test_provenance_rejects_mutable_github_fqdn_and_www_urls(self):
+        from copy import deepcopy
+
+        # DNS resolves github.com. to the same host as github.com;
+        # www.github.com redirects there. Neither may bypass the
+        # immutable-commit rule for approved source attribution.
+        second = deepcopy(self.batch["documents"][0])
+        second["id"] = "github-provenance-check"
+        second["bookmark"] = "/docs/source/check"
+        second["revisions"][0]["attachments"][0]["id"] = "source-check-attachment"
+        self.batch["documents"] = [second]
+        for url in (
+            "https://github.com./DruHustle/example/blob/main/drawing",
+            "https://www.github.com/DruHustle/example/blob/main/drawing",
+        ):
+            with self.subTest(url=url):
+                second["revisions"][0]["source_url"] = url
+                with self.assertRaisesRegex(ValueError, "Git provenance must name an immutable commit"):
+                    self.upload()
+                with catalog.connection(self.database) as db:
+                    self.assertEqual(db.execute("SELECT count(*) FROM documents").fetchone()[0], 1)
+        second["revisions"][0]["source_url"] = (
+            "https://github.com./DruHustle/example/blob/" + "a" * 40 + "/drawing"
+        )
+        self.assertEqual(self.upload()["documents"], 1)
+
     def test_snapshot_import_rejects_corrupt_existing_attachment_object(self):
         from copy import deepcopy
 
