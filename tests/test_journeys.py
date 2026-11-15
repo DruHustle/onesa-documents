@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import sqlite3
 import tempfile
 import time
 import unittest
@@ -220,6 +221,22 @@ class Journeys(unittest.TestCase):
                 "SELECT name FROM sqlite_master WHERE type='table'"
             )}
         self.assertEqual(tables, {"sentinel"})
+
+    def test_readiness_fails_fast_when_private_database_write_lock_is_busy(self):
+        # The container healthcheck has a 3-second deadline. Readiness must
+        # not inherit the normal 15-second request lock timeout or a routine
+        # writer can make the container appear dead while health probes hang.
+        lock = sqlite3.connect(self.database, timeout=0.1)
+        try:
+            lock.execute("BEGIN IMMEDIATE")
+            started = time.monotonic()
+            response = self.client.get("/readyz")
+            elapsed = time.monotonic() - started
+            self.assertEqual(response.status_code, 503)
+            self.assertLess(elapsed, 2.5)
+        finally:
+            lock.rollback()
+            lock.close()
 
     def test_readiness_rejects_private_database_symlink_replacement(self):
         self.database.unlink()
