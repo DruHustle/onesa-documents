@@ -202,7 +202,12 @@ class Journeys(unittest.TestCase):
         directory.mkdir()
         directory.chmod(0o755)
         database = directory / "documents.sqlite"
-        manifest = self.root / "cli-manifest.json"
+        import_dir = directory / "import"
+        objects = import_dir / "objects"
+        objects.mkdir(parents=True)
+        digest_object = hashlib.sha256(self.attachment).hexdigest()
+        (objects / digest_object).write_bytes(self.attachment)
+        manifest = import_dir / "manifest.json"
         manifest.write_text(json.dumps(self.batch))
         digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
         with patch("sys.argv", [
