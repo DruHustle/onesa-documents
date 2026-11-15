@@ -217,6 +217,20 @@ class Journeys(unittest.TestCase):
         self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
         self.assertEqual(database.stat().st_mode & 0o777, 0o600)
 
+    def test_import_cli_rejects_manifest_outside_private_volume(self):
+        directory = self.root / "cli-private-volume-outside-manifest"
+        directory.mkdir()
+        manifest = self.root / "outside-manifest.json"
+        manifest.write_text(json.dumps(self.batch))
+        database = directory / "documents.sqlite"
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        with patch("sys.argv", [
+            "onesa-documents", str(database), str(manifest), "--sha256", digest
+        ]):
+            with self.assertRaisesRegex(RuntimeError, "inside DOCS_DATA"):
+                import_cli()
+        self.assertFalse(database.exists())
+
     def test_readiness_fails_closed_when_private_database_volume_disappears(self):
         self.assertEqual(self.client.get("/healthz").status_code, 200)
         self.assertEqual(self.client.get("/readyz").status_code, 200)
