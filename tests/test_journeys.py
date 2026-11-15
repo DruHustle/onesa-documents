@@ -484,6 +484,20 @@ class Journeys(unittest.TestCase):
             self.start().get("/api/documents", headers=headers).status_code, 503
         )
 
+    def test_malformed_oidc_token_exchange_response_is_a_controlled_outage(self):
+        # A 200 response containing a JSON array/string/null is not a token
+        # response. It previously raised TypeError in callback and returned
+        # an unhandled 500 instead of the normal retryable 503.
+        for malformed in (None, [], "not-a-token-object"):
+            with self.subTest(response=malformed):
+                self.exchange = lambda code, verifier, value=malformed: value
+                client = self.start()
+                self.client = client
+                callback = self.initiate(BOOKMARK)
+                response = client.get(callback)
+                self.assertEqual(response.status_code, 503)
+                self.assertIn("Retry sign-in for this document", response.text)
+
     def test_corrupt_jwks_cache_and_invalid_provider_reply_fail_closed(self):
         # Corrupt but valid JSON on disk must never yield a 500 error or
         # authorize a token, even when the identity provider is unavailable.
