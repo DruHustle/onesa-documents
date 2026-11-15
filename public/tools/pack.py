@@ -5,13 +5,34 @@ import json
 import sys
 import tempfile
 import zipfile
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from build import ROOT
 
 
 def pack(source, approval, deployment, revision):
     manifest = json.loads(approval.read_text())
+    # Every approved path must also be a canonical deployable ZIP path.
+    # Otherwise pack() could report success for a release that build()
+    # necessarily rejects (duplicate names or normalized separators).
+    if not isinstance(manifest, list):
+        raise ValueError("Public approval must list files")
+    seen = set()
+    for row in manifest:
+        if not isinstance(row, dict):
+            raise ValueError("Invalid public approval row")
+        name = row.get("path")
+        if (
+            not isinstance(name, str)
+            or not name
+            or name.startswith(("/", "."))
+            or "\\" in name
+            or any(part in ("", ".", "..") for part in name.split("/"))
+            or PurePosixPath(name).as_posix() != name
+            or name in seen
+        ):
+            raise ValueError("Invalid or duplicate public source path")
+        seen.add(name)
     files = {}
     with tempfile.TemporaryFile() as raw:
         with zipfile.ZipFile(
