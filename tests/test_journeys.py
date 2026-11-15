@@ -636,6 +636,17 @@ class Journeys(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "separate nonproduction hostname"):
                     create(dict(self.cfg, DOCS_ORIGIN=equivalent))
 
+    def test_existing_private_volume_permissions_are_tightened(self):
+        # mkdir(mode=0700) does not change an existing mount's permissions.
+        # The data directory contains sessions, ACLs, drafts and signing keys.
+        directory = self.root / "loose-private-volume"
+        directory.mkdir()
+        directory.chmod(0o755)
+        create(dict(self.cfg, DOCS_DATA=str(directory)))
+        database = directory / "documents.sqlite"
+        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(database.stat().st_mode & 0o777, 0o600)
+
     def test_permanent_public_and_internal_origins(self):
         for public in (
             "https://docs.onesa.eu",

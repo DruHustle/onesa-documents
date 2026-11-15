@@ -93,6 +93,15 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         )
     directory = Path(cfg["DOCS_DATA"]).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # DOCS_DATA can be an existing mounted volume; mkdir(mode=...) does not
+    # tighten its permissions when it already exists. This directory holds
+    # access tokens, ACLs, drafts and issuer signing-key cache files.
+    try:
+        os.chmod(directory, 0o700)
+        if directory.stat().st_mode & 0o077:
+            raise OSError("private directory remains accessible to group/other")
+    except OSError as exc:
+        raise RuntimeError("Cannot secure private Documents data directory") from exc
     database = directory / "documents.sqlite"
     # The private mount may disappear across a production restart. Never
     # silently bootstrap a replacement empty catalog on the container disk:
@@ -115,6 +124,14 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         except sqlite3.Error as exc:
             raise RuntimeError("Production Documents store invalid; restore the private volume") from exc
     catalog.initialize(database)
+    # Also restrict an existing database file. The containing directory is
+    # private, but file mode is defense in depth for backups and mount changes.
+    try:
+        os.chmod(database, 0o600)
+        if database.stat().st_mode & 0o077:
+            raise OSError("private database remains accessible to group/other")
+    except OSError as exc:
+        raise RuntimeError("Cannot secure private Documents database") from exc
     keys = keys or Keys(issuer, directory, clock=clock)
     with catalog.connection(database) as db:
         db.executescript("""CREATE TABLE IF NOT EXISTS challenges(
