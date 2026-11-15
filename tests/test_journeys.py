@@ -197,6 +197,31 @@ class Journeys(unittest.TestCase):
         self.addCleanup(production.close)
         self.assertEqual(production.get("/readyz").status_code, 200)
 
+    def test_application_refuses_symlinked_private_database(self):
+        # The import CLI already rejected a symlinked DB, but the web entry
+        # point followed it and could initialize/modify a database outside
+        # DOCS_DATA. Keep the external target completely untouched.
+        external = self.root / "external.sqlite"
+        with catalog.connection(external) as db:
+            db.execute("CREATE TABLE sentinel(value TEXT)")
+        directory = self.root / "symlinked-private-volume"
+        directory.mkdir()
+        (directory / "documents.sqlite").symlink_to(external)
+        with self.assertRaisesRegex(RuntimeError, "must not be a symlink"):
+            create(dict(self.cfg, DOCS_DATA=str(directory)))
+        with catalog.connection(external) as db:
+            tables = {row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+        self.assertEqual(tables, {"sentinel"})
+
+    def test_readiness_rejects_private_database_symlink_replacement(self):
+        self.database.unlink()
+        external = self.root / "replacement.sqlite"
+        catalog.initialize(external)
+        self.database.symlink_to(external)
+        self.assertEqual(self.client.get("/readyz").status_code, 503)
+
     def test_import_cli_secures_existing_private_volume_and_database(self):
         directory = self.root / "cli-private-volume"
         directory.mkdir()
