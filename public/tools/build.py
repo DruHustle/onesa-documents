@@ -60,8 +60,16 @@ def build(output):
         # Explicit reviewed publications only. Never scan internal source, ACLs,
         # private objects or the repository root to discover public material.
         catalog = json.loads((ROOT / "publications.json").read_text())
+        if not isinstance(catalog, list):
+            raise ValueError("Public publication catalog must be a list")
         links = []
+        seen_slugs = set()
         for entry in catalog:
+            if not isinstance(entry, dict):
+                raise ValueError("Invalid public publication entry")
+            if entry.get("slug") in seen_slugs:
+                raise ValueError("Duplicate public publication slug")
+            seen_slugs.add(entry.get("slug"))
             slug = entry["slug"]
             kind = entry["format"]
             if not re.fullmatch("[a-z0-9]+(?:-[a-z0-9]+)*", slug) or kind not in (
