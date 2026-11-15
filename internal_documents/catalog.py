@@ -76,6 +76,9 @@ def import_snapshot(path, manifest, digest):
     batch = json.loads(data)
     if batch["schema"] != 1:
         raise ValueError("Unsupported document manifest")
+    legacy_engineering = batch.get("legacy_engineering", False)
+    if not isinstance(legacy_engineering, bool):
+        raise ValueError("Invalid legacy engineering attestation")
     totals = {"documents": 0, "revisions": 0, "attachments": 0, "grants": 0}
     with connection(path) as db:
         db.execute("BEGIN IMMEDIATE")
@@ -91,7 +94,14 @@ def import_snapshot(path, manifest, digest):
                 or any(part in (".", "..", "") for part in bookmark.split("/")[2:])
             ):
                 raise ValueError("Unsupported legacy bookmark")
-            collection = doc.get("collection", "engineering")
+            if "collection" not in doc:
+                if not legacy_engineering:
+                    raise ValueError("Every new document requires an explicit collection")
+                collection = "engineering"
+            else:
+                collection = doc["collection"]
+                if legacy_engineering and collection != "engineering":
+                    raise ValueError("Legacy engineering exports cannot contain other collections")
             if not isinstance(collection, str) or not re.fullmatch(
                 r"[a-z][a-z0-9-]{0,63}", collection
             ):
