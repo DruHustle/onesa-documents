@@ -50,5 +50,26 @@ class PublicIndexCollisionTest(unittest.TestCase):
             self.assertFalse(output.exists())
 
 
+    def test_noncanonical_zip_path_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "editions").mkdir()
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("guides//intro.html", b"public")
+            payload = archive.getvalue()
+            digest = hashlib.sha256(payload).hexdigest()
+            (root / "editions" / (digest + ".part")).write_bytes(payload)
+            (root / "release.json").write_text(json.dumps({
+                "chunks": [digest],
+                "archive_sha256": digest,
+                "files": {"guides//intro.html": hashlib.sha256(b"public").hexdigest()},
+            }))
+            output = root / "dist"
+            with patch.object(builder, "ROOT", root):
+                with self.assertRaisesRegex(ValueError, "Invalid public file path"):
+                    builder.build(output)
+            self.assertFalse(output.exists())
+
 if __name__ == "__main__":
     unittest.main()
