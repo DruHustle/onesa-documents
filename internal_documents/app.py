@@ -228,7 +228,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         if database.is_symlink() or not database.is_file():
             raise HTTPException(503, "Document store unavailable")
         try:
-            with catalog.connection(database) as db:
+            with catalog.connection(database, timeout=1) as db:
                 catalog.verify_schema(db)
                 db.execute("BEGIN IMMEDIATE")
                 db.rollback()
