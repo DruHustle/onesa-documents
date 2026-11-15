@@ -29,6 +29,30 @@ CREATE TABLE IF NOT EXISTS attachments(
 CREATE TABLE IF NOT EXISTS imports(digest TEXT PRIMARY KEY);
 """
 
+# Readiness must validate the schema used by every production query, not merely
+# check that table names exist. SQLite accepts tables with the right names but
+# missing columns; SELECT 1 would report those databases as ready before the
+# first customer request failed with an unhandled OperationalError.
+REQUIRED_COLUMNS = {
+    "documents": {"id", "product", "discipline", "author", "bookmark", "current", "collection"},
+    "revisions": {"document", "id", "author", "created", "title", "body", "source", "approved"},
+    "grants": {"document", "principal", "permission"},
+    "objects": {"digest", "bytes"},
+    "attachments": {"id", "document", "revision", "name", "digest"},
+    "imports": {"digest"},
+    "challenges": {"state", "binding", "verifier", "nonce", "destination", "expires"},
+    "sessions": {"id", "access_token", "expires"},
+}
+
+
+def verify_schema(db):
+    """Raise DatabaseError unless every production table has its required columns."""
+    for table, required in REQUIRED_COLUMNS.items():
+        actual = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+        if not required.issubset(actual):
+            raise sqlite3.DatabaseError(f"Private Documents schema is invalid: {table}")
+
+
 
 def identifier(value):
     if not isinstance(value, str) or not re.fullmatch(
