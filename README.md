@@ -24,7 +24,7 @@ Install `python -m pip install -r requirements.txt` with Python 3.12 and run `py
 | DOCS_CLIENT_ID, DOCS_CLIENT_SECRET | Confidential web client registered only for the internal product and its exact environment-specific callback. |
 | DOCS_ORIGIN | Production is `https://docs.internal.onesa.eu`. Use a protected separate hostname for staging. |
 | DOCS_ENVIRONMENT | The Docker image defaults to `production` and enforces the two canonical production origins. Explicitly override to `staging` only on isolated nonproduction deployments with their own OIDC client, hostname, and private data. |
-| DOCS_DATA | Private writable directory for document data and the issuer-specific public signing-key cache. |
+| DOCS_DATA | Private writable directory for document data and the issuer-specific public signing-key cache. The service enforces directory mode `0700` and SQLite database mode `0600`; startup fails if those restrictions cannot be applied. |
 
 The sign-in flow uses Authorization Code with S256 PKCE, nonce and one-use browser-bound state. Signed access tokens must match the configured issuer and resource. The Onesa UUID and scoped products/roles are namespaced claims. The canonical grant is `internal-documents`. Previously approved `engineering-documents` identities remain eligible **only for the engineering collection** and still require per-document ACLs. Search, metadata, preview, drafts and attachment downloads apply the same restriction. HR access requires an explicit ACL plus canonical Internal Documents access. Portal and Identity administrators inherit no document grants.
 
