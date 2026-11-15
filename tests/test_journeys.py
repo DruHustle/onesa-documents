@@ -482,6 +482,17 @@ class Journeys(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "DOCS_ENVIRONMENT"):
             create(canonical)
 
+        # An explicit staging flag must not allow a staging issuer/client to
+        # occupy the canonical production hostname and intercept real users.
+        staging_on_production = dict(
+            self.cfg,
+            DOCS_ORIGIN="https://docs.internal.onesa.eu",
+            DOCS_ISSUER="https://auth.onesa.eu",
+            DOCS_ENVIRONMENT="staging",
+        )
+        with self.assertRaisesRegex(ValueError, "separate nonproduction hostname"):
+            create(staging_on_production)
+
     def test_permanent_public_and_internal_origins(self):
         for public in (
             "https://docs.onesa.eu",

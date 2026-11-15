@@ -79,6 +79,10 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         raise ValueError(
             "Production Internal Documents requires the dedicated internal origin and Onesa Identity issuer"
         )
+    if environment == "staging" and origin == "https://docs.internal.onesa.eu":
+        raise ValueError(
+            "Staging Internal Documents must use a separate nonproduction hostname"
+        )
     audience = cfg["DOCS_AUDIENCE"]
     client = cfg["DOCS_CLIENT_ID"]
     secret = cfg["DOCS_CLIENT_SECRET"]
