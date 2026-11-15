@@ -35,7 +35,7 @@ jobs:
 
   public-guide-native-touch:
     runs-on: macos-26-intel
-    timeout-minutes: 22
+    timeout-minutes: 35
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683
         with:
@@ -53,14 +53,14 @@ jobs:
           xcrun simctl boot "$device" || xcrun simctl list devices booted | grep -F "$device"
           xcrun simctl bootstatus "$device" -b
           xcrun simctl openurl "$device" https://docs.onesa.eu/
-          xcodebuild test -project "$work/host/InstalledClient.xcodeproj" -scheme InstalledClient \
-            -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
-            CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- -derivedDataPath "$work/build" -resultBundlePath "$work/results.xcresult"
+          bash tests/ios-browser/run-native-guide.sh "$work" "$device"
       - name: Retain failed native Safari XCTest diagnostics
         if: failure()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
         with:
           name: public-docs-native-safari-xcresult
-          path: ${{ runner.temp }}/public-docs-native/results.xcresult/
+          path: |
+            ${{ runner.temp }}/public-docs-native/results-*.xcresult/
+            ${{ runner.temp }}/public-docs-native/xcode-*.log
           if-no-files-found: warn
           retention-days: 3
