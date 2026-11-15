@@ -11,6 +11,25 @@ import build as edition
 
 
 class PublicEdition(unittest.TestCase):
+    def test_public_release_matches_reviewed_deployment_baseline(self):
+        # The public site is anonymous. A change to its 258-file static corpus
+        # must therefore be an explicit reviewed release, not merely a
+        # self-consistent edit to release.json and its chunks.
+        release = json.loads((edition.ROOT / "release.json").read_text())
+        self.assertEqual(
+            release["deployment"],
+            "dpl_HgK26DEvNtJS4i5bzXUd6sSVM8fz",
+        )
+        self.assertEqual(
+            release["source_revision"],
+            "d8a0807f43dfd83388927cdb1e84bf058ed81286",
+        )
+        self.assertEqual(
+            release["archive_sha256"],
+            "af09c803884239583c3c8fe5aff2f83e88ddbfa9781451eca4979ca03bb7b6c5",
+        )
+
+
     def test_approved_artifact_is_reconstructed_without_identity(self):
         with tempfile.TemporaryDirectory() as temp:
             output = Path(temp) / "site"
