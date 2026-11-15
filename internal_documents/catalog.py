@@ -63,11 +63,11 @@ def identifier(value):
 
 
 @contextmanager
-def connection(path):
+def connection(path, *, timeout=15):
     path = Path(path)
     if path.is_symlink():
         raise sqlite3.OperationalError("Private Documents database must not be a symlink")
-    db = sqlite3.connect(path, timeout=15)
+    db = sqlite3.connect(path, timeout=timeout)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     try:
