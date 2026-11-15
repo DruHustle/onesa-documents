@@ -46,6 +46,9 @@ def build(output):
                     or ".." in path.parts
                     or "\\" in name
                     or name.startswith(".")
+                    or name.endswith("/")
+                    or any(part in ("", ".") for part in name.split("/"))
+                    or path.as_posix() != name
                 ):
                     raise ValueError("Invalid public file path")
                 data = z.read(name)
@@ -57,8 +60,16 @@ def build(output):
         # Explicit reviewed publications only. Never scan internal source, ACLs,
         # private objects or the repository root to discover public material.
         catalog = json.loads((ROOT / "publications.json").read_text())
+        if not isinstance(catalog, list):
+            raise ValueError("Public publication catalog must be a list")
         links = []
+        seen_slugs = set()
         for entry in catalog:
+            if not isinstance(entry, dict):
+                raise ValueError("Invalid public publication entry")
+            if entry.get("slug") in seen_slugs:
+                raise ValueError("Duplicate public publication slug")
+            seen_slugs.add(entry.get("slug"))
             slug = entry["slug"]
             kind = entry["format"]
             if not re.fullmatch("[a-z0-9]+(?:-[a-z0-9]+)*", slug) or kind not in (
@@ -98,7 +109,10 @@ def build(output):
                 )
             links.append((slug, title, target.suffix))
         if links:
-            (stage / "publications" / "index.html").write_text(
+            index = stage / "publications" / "index.html"
+            if index.exists():
+                raise ValueError("Approved publication index collides with baseline")
+            index.write_text(
                 '<!doctype html><html lang="en"><title>Public documents</title><h1>Public documents</h1><ul>'
                 + "".join(
                     '<li><a href="/publications/'
