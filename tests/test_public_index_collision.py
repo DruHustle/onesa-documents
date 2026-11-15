@@ -50,6 +50,37 @@ class PublicIndexCollisionTest(unittest.TestCase):
             self.assertFalse(output.exists())
 
 
+    def test_symlinked_publication_source_root_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "editions").mkdir()
+            private = root / "private-sources"
+            private.mkdir()
+            content = b"Unapproved material"
+            (private / "example.txt").write_bytes(content)
+            (root / "source").symlink_to(private, target_is_directory=True)
+            archive = io.BytesIO()
+            with zipfile.ZipFile(archive, "w") as bundle:
+                bundle.writestr("index.html", b"approved baseline")
+            payload = archive.getvalue()
+            digest = hashlib.sha256(payload).hexdigest()
+            (root / "editions" / (digest + ".part")).write_bytes(payload)
+            (root / "release.json").write_text(json.dumps({
+                "chunks": [digest],
+                "archive_sha256": digest,
+                "files": {"index.html": hashlib.sha256(b"approved baseline").hexdigest()},
+            }))
+            (root / "publications.json").write_text(json.dumps([{
+                "slug": "example",
+                "format": "txt",
+                "title": "Example",
+                "sha256": hashlib.sha256(content).hexdigest(),
+            }]))
+            with patch.object(builder, "ROOT", root):
+                with self.assertRaisesRegex(ValueError, "source root"):
+                    builder.build(root / "dist")
+            self.assertFalse((root / "dist").exists())
+
     def test_noncanonical_zip_path_is_rejected(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
