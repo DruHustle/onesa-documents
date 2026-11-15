@@ -173,6 +173,7 @@ class Journeys(unittest.TestCase):
         self.assertEqual(
             self.client.get("/api/attachments/drawing42").content, self.attachment
         )
+        self.assertIn('<form method="post" action="/logout">', self.client.get("/").text)
         self.assertEqual(
             self.client.post("/logout", headers={"origin": WEB}).status_code, 200
         )
@@ -384,6 +385,25 @@ class Journeys(unittest.TestCase):
             self.assertEqual(
                 db.execute("SELECT count(*) FROM imports").fetchone()[0], 1
             )
+
+    def test_draft_form_rejects_invalid_encoding_and_ambiguous_fields(self):
+        headers = {
+            **self.bearer(EDITOR),
+            "Origin": WEB,
+            "Content-Type": "application/x-www-form-urlencoded",
+        }
+        fields = b"base_revision=02&title=Drawing&body="
+        for body in [fields + b"draft&extra=value", fields + b"draft&body=other",
+                     fields + b"\xff", fields + b"%FF"]:
+            with self.subTest(body=body):
+                response = self.client.post("/edit/old-42", content=body, headers=headers)
+                self.assertEqual(response.status_code, 422)
+        valid = self.client.post("/edit/old-42", content=fields + b"na%C3%AFve",
+                                 headers=headers)
+        self.assertEqual(valid.status_code, 200)
+        with catalog.connection(self.database) as db:
+            drafts = db.execute("SELECT body FROM revisions WHERE approved=0").fetchall()
+        self.assertEqual([row["body"] for row in drafts], ["naïve"])
 
     def test_expired_editor_preserves_unsaved_form_and_role_downgrade(self):
         payload = {
