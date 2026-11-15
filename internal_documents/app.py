@@ -4,6 +4,7 @@ import html
 import json
 import os
 import secrets
+import sqlite3
 import time
 from pathlib import Path
 from urllib.parse import parse_qs, quote, urlencode, urlsplit
@@ -171,6 +172,26 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     @app.get("/healthz")
     def health():
         return {"service": "internal-documents"}
+
+    @app.get("/readyz")
+    def readiness():
+        # Liveness must stay independent from the private store. Readiness,
+        # however, must fail if a persistent volume disappears or SQLite is
+        # unavailable; never let SQLite silently create an empty replacement.
+        if not database.is_file():
+            raise HTTPException(503, "Document store unavailable")
+        try:
+            with catalog.connection(database) as db:
+                for table in (
+                    "documents", "revisions", "grants", "objects",
+                    "attachments", "imports", "challenges", "sessions",
+                ):
+                    db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+                db.execute("BEGIN IMMEDIATE")
+                db.rollback()
+        except sqlite3.Error:
+            raise HTTPException(503, "Document store unavailable")
+        return {"service": "internal-documents", "ready": True}
 
     @app.get("/sign-in")
     def sign_in(next: str = "/"):

@@ -160,6 +160,17 @@ class Journeys(unittest.TestCase):
         self.assertEqual(self.auth["code_challenge_method"], ["S256"])
         return "/callback?code=fixture-code&state=" + self.auth["state"][0]
 
+    def test_readiness_fails_closed_when_private_database_volume_disappears(self):
+        self.assertEqual(self.client.get("/healthz").status_code, 200)
+        self.assertEqual(self.client.get("/readyz").status_code, 200)
+        self.database.unlink()
+        # Liveness is a process check; readiness must not create a blank
+        # SQLite database if the persistent volume has disappeared.
+        self.assertEqual(self.client.get("/healthz").status_code, 200)
+        response = self.client.get("/readyz")
+        self.assertEqual(response.status_code, 503)
+        self.assertFalse(self.database.exists())
+
     def test_portal_offline_bookmark_and_session(self):
         target = BOOKMARK + "?view=spec"
         cb = self.initiate(target)
