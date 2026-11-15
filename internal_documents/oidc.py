@@ -42,6 +42,18 @@ class Keys:
         response.raise_for_status()
         return response.json()
 
+    @staticmethod
+    def decode_signing_key(value):
+        # A partly written or corrupted JSON cache can contain a matching kid
+        # with an invalid value. Never let the JWT library's AttributeError or
+        # TypeError escape as a 500 from a protected document request.
+        try:
+            if not isinstance(value, dict) or value.get("kty") != "RSA":
+                raise ValueError("Invalid cached RSA signing key")
+            return jwt.PyJWK.from_dict(value, algorithm="RS256").key
+        except (AttributeError, TypeError, ValueError, KeyError, jwt.PyJWTError) as exc:
+            raise KeysUnavailable() from exc
+
     def key(self, kid):
         with self.lock:
             now = self.clock()
@@ -57,7 +69,12 @@ class Keys:
                 cached = {"time": 0, "keys": {}}
             age = now - cached["time"]
             if 0 <= age < 300 and kid in cached["keys"]:
-                return jwt.PyJWK.from_dict(cached["keys"][kid], algorithm="RS256").key
+                try:
+                    return self.decode_signing_key(cached["keys"][kid])
+                except KeysUnavailable:
+                    # A malformed cache is not valid signing evidence. Try the
+                    # upstream JWKS again rather than throwing a server error.
+                    cached, age = {"time": 0, "keys": {}}, now
             if now - self.last_attempt >= 30:
                 self.last_attempt = now
                 try:
@@ -85,7 +102,7 @@ class Keys:
                 raise KeysUnavailable()
             if kid not in cached["keys"]:
                 raise jwt.InvalidTokenError("Unrecognized signing key")
-            return jwt.PyJWK.from_dict(cached["keys"][kid], algorithm="RS256").key
+            return self.decode_signing_key(cached["keys"][kid])
 
     def verify(self, token, audience):
         header = jwt.get_unverified_header(token)

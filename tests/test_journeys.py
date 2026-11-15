@@ -380,6 +380,29 @@ class Journeys(unittest.TestCase):
         response = self.client.get("/api/documents", headers=self.bearer())
         self.assertEqual(response.status_code, 503)
 
+    def test_malformed_matching_cached_jwk_fails_closed_and_recovers(self):
+        # A matching kid with an invalid value previously raised unhandled
+        # AttributeError/TypeError instead of treating a damaged cache as an
+        # upstream key outage. An available issuer must repair the cache.
+        headers = self.bearer()
+        for invalid in (None, {"kty": "RSA", "n": None, "e": "AQAB"}):
+            with self.subTest(key=invalid):
+                self.keys.file.write_text(json.dumps({
+                    "time": time.time(), "keys": {"fixture": invalid}
+                }))
+                self.keys.last_attempt = -1e20
+                self.online = False
+                self.assertEqual(
+                    self.client.get("/api/documents", headers=headers).status_code, 503
+                )
+                self.keys.last_attempt = -1e20
+                self.online = True
+                self.assertEqual(
+                    self.client.get("/api/documents", headers=headers).status_code, 200
+                )
+                repaired = json.loads(self.keys.file.read_text())
+                self.assertEqual(repaired["keys"]["fixture"]["kty"], "RSA")
+
     def test_import_replay_and_atomic_conflict(self):
         self.assertEqual(self.upload(), {"already_imported": True})
         self.batch["documents"][0]["id"] = "another"
