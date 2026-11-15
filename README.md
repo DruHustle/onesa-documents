@@ -15,7 +15,7 @@ The imported public release reproduces the existing site's approved developer gu
 
 ## Internal pilot
 
-Install `python -m pip install -r requirements.txt` with Python 3.12 and run `python -m unittest discover -s tests -v`. Start using `uvicorn internal_documents.app:create --factory --host 127.0.0.1 --port 8000 --no-access-log` behind TLS, or build the repository Dockerfile. Mount a private encrypted persistent volume at `/srv/docs`. It contains server-side sessions, ACLs, drafts and attachments. Keep it and its backups outside source control and the public deployment. Configure access logs to omit callback query strings.
+Install `python -m pip install -r requirements.txt` with Python 3.12 and run `python -m unittest discover -s tests -v`. Start using `uvicorn internal_documents.app:create --factory --host 127.0.0.1 --port 8000 --no-access-log` behind TLS, or build the repository Dockerfile. Mount a private encrypted persistent volume at `/srv/docs`. `/healthz` is process liveness only; `/readyz` checks the private SQLite schema and write-lock availability and returns 503 if the persistent store is missing or unavailable. The Docker image uses `/readyz` for its container health check. It contains server-side sessions, ACLs, drafts and attachments. Keep it and its backups outside source control and the public deployment. Configure access logs to omit callback query strings.
 
 | Configuration | Staging / production settings |
 | --- | --- |
