@@ -68,6 +68,9 @@ class Journeys(unittest.TestCase):
         }
         self.batch = {
             "schema": 1,
+            # This fixture represents a legacy engineering-only export. New
+            # imports must classify every document explicitly.
+            "legacy_engineering": True,
             "expected_counts": {
                 "documents": 1,
                 "revisions": 1,
@@ -93,8 +96,11 @@ class Journeys(unittest.TestCase):
         self.upload()
 
     def upload(self):
+        return self.upload_batch(self.batch)
+
+    def upload_batch(self, batch):
         manifest = self.root / "manifest.json"
-        manifest.write_text(json.dumps(self.batch))
+        manifest.write_text(json.dumps(batch))
         return catalog.import_snapshot(
             self.database, manifest, hashlib.sha256(manifest.read_bytes()).hexdigest()
         )
@@ -727,6 +733,30 @@ class Journeys(unittest.TestCase):
             )
         )
 
+    def test_import_rejects_missing_collection_without_legacy_attestation(self):
+        from copy import deepcopy
+
+        batch = deepcopy(self.batch)
+        batch.pop("legacy_engineering")
+        batch["documents"][0]["id"] = "unclassified-document"
+        batch["documents"][0]["bookmark"] = "/docs/unclassified/document"
+        with self.assertRaisesRegex(ValueError, "explicit collection"):
+            self.upload_batch(batch)
+        with catalog.connection(self.database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM documents").fetchone()[0], 1)
+
+    def test_legacy_engineering_attestation_cannot_classify_hr_as_engineering(self):
+        from copy import deepcopy
+
+        batch = deepcopy(self.batch)
+        batch["documents"][0]["id"] = "misclassified-hr"
+        batch["documents"][0]["bookmark"] = "/docs/hr/unsafe-default"
+        batch["documents"][0]["collection"] = "hr"
+        with self.assertRaisesRegex(ValueError, "cannot contain other collections"):
+            self.upload_batch(batch)
+        with catalog.connection(self.database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM documents").fetchone()[0], 1)
+
     def test_legacy_engineering_grant_never_reads_hr_even_with_document_acl(self):
         from copy import deepcopy
 
@@ -739,6 +769,7 @@ class Journeys(unittest.TestCase):
         )
         hr["revisions"][0]["attachments"][0]["id"] = "hr-attachment"
         self.batch["documents"] = [hr]
+        self.batch.pop("legacy_engineering")
         self.upload()
         legacy = self.bearer(EDITOR, products=["engineering-documents"])
         self.assertEqual(
