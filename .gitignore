@@ -6,3 +6,8 @@ data/
 
 public/dist/
 .ruff_cache/
+objects/
+manifest*.json
+backups/
+*.sqlite-wal
+*.sqlite-shm

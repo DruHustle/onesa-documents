@@ -4,6 +4,7 @@ import json
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -14,6 +15,7 @@ from fastapi.testclient import TestClient
 
 from internal_documents import catalog
 from internal_documents.app import create
+from internal_documents.__main__ import run as import_cli
 from internal_documents.oidc import PRODUCT, PRODUCTS, UID, Keys
 
 ISS = "https://identity.example.test/"
@@ -194,6 +196,40 @@ class Journeys(unittest.TestCase):
         production = TestClient(app, base_url="https://docs.internal.onesa.eu")
         self.addCleanup(production.close)
         self.assertEqual(production.get("/readyz").status_code, 200)
+
+    def test_import_cli_secures_existing_private_volume_and_database(self):
+        directory = self.root / "cli-private-volume"
+        directory.mkdir()
+        directory.chmod(0o755)
+        database = directory / "documents.sqlite"
+        import_dir = directory / "import"
+        objects = import_dir / "objects"
+        objects.mkdir(parents=True)
+        digest_object = hashlib.sha256(self.attachment).hexdigest()
+        (objects / digest_object).write_bytes(self.attachment)
+        manifest = import_dir / "manifest.json"
+        manifest.write_text(json.dumps(self.batch))
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        with patch("sys.argv", [
+            "onesa-documents", str(database), str(manifest), "--sha256", digest
+        ]):
+            import_cli()
+        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(database.stat().st_mode & 0o777, 0o600)
+
+    def test_import_cli_rejects_manifest_outside_private_volume(self):
+        directory = self.root / "cli-private-volume-outside-manifest"
+        directory.mkdir()
+        manifest = self.root / "outside-manifest.json"
+        manifest.write_text(json.dumps(self.batch))
+        database = directory / "documents.sqlite"
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        with patch("sys.argv", [
+            "onesa-documents", str(database), str(manifest), "--sha256", digest
+        ]):
+            with self.assertRaisesRegex(RuntimeError, "inside DOCS_DATA"):
+                import_cli()
+        self.assertFalse(database.exists())
 
     def test_readiness_fails_closed_when_private_database_volume_disappears(self):
         self.assertEqual(self.client.get("/healthz").status_code, 200)
