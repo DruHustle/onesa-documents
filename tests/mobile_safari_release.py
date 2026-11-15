@@ -64,7 +64,7 @@ def main():
     try:
         until(lambda: webdriver("GET", "/status") is not None)
         capabilities = {"capabilities": {"alwaysMatch": {
-            "browserName": "Safari", "platformName": "iOS",
+            "browserName": "Safari", "platformName": "iOS", "pageLoadStrategy": "eager",
             "safari:useSimulator": True, "safari:deviceUDID": udid,
         }}}
         for attempt in range(3):
@@ -82,8 +82,28 @@ def main():
             return webdriver(method, base + path, payload)
         def js(script, *args):
             return run("POST", "/execute/sync", {"script": script, "args": args})
-        def goto(url):
-            run("POST", "/url", {"url": url})
+        def goto(url, redirect_hosts=()):
+            target = urlsplit(url)
+            # SafariDriver's normal page-load strategy can wait indefinitely for
+            # a late resource even after Safari has navigated. Use eager loading,
+            # then independently confirm the actual browser URL and DOM state.
+            try:
+                run("POST", "/url", {"url": url})
+            except RuntimeError as error:
+                if "timed out" not in str(error).lower():
+                    raise
+
+            def reached():
+                current = urlsplit(run("GET", "/url"))
+                if current.hostname == target.hostname and current.path == target.path:
+                    return current
+                if current.hostname in redirect_hosts:
+                    return current
+                return None
+
+            location = until(reached, seconds=20)
+            until(lambda: js("return document.readyState !== 'loading'"), seconds=20)
+            return location
         def find(css):
             return run("POST", "/element", {"using": "css selector", "value": css})[ELEMENT]
         def item(label, perform):
@@ -97,15 +117,17 @@ def main():
                 failures.append(label)
 
         def public_guide():
-            goto("https://docs.onesa.eu/docs/public/quickstart")
+            location = goto("https://docs.onesa.eu/docs/public/quickstart")
             title = run("GET", "/title")
-            return {"passed": "quickstart" in title.lower(), "guide": title}
+            return {"passed": location.hostname == "docs.onesa.eu" and location.path == "/docs/public/quickstart" and "quickstart" in title.lower(), "url": location.geturl(), "guide": title}
         item("Anonymous guide deep link and reading", public_guide)
 
 
 
         def public_pdf():
-            goto("https://docs.onesa.eu/downloads")
+            location = goto("https://docs.onesa.eu/downloads")
+            if location.hostname != "docs.onesa.eu" or location.path.rstrip("/") != "/downloads":
+                raise RuntimeError("Public downloads navigation did not reach the downloads page")
             result = run("POST", "/execute/async", {
                 "script": """
                 const done = arguments[arguments.length - 1];
@@ -130,7 +152,7 @@ def main():
             ("Direct Identity sign-in", "https://auth.onesa.eu/", "identity"),
         ]:
             def observe(url=url, condition=condition):
-                goto(url)
+                location = goto(url, redirect_hosts=("auth.onesa.eu",) if condition == "internal" else ())
                 time.sleep(3)
                 location = urlsplit(run("GET", "/url"))
                 title = run("GET", "/title")
@@ -140,7 +162,9 @@ def main():
                 return {"passed": passed, "host": location.hostname, "path": location.path, "page": title, "sign_in_visible": has_login}
             item(label, observe)
         def result_touch():
-            goto("https://docs.onesa.eu/")
+            home = goto("https://docs.onesa.eu/")
+            if home.hostname != "docs.onesa.eu" or home.path not in ("/", "/index.html"):
+                return {"passed": False, "reason": "public homepage navigation not confirmed", "url": home.geturl()}
             until(lambda: js("return document.readyState === 'complete'"))
             time.sleep(1)
             box = find('input[aria-label="Search documentation"]')
@@ -183,6 +207,9 @@ print((request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.j
                     return command(reader,path).lower()
                 before = read_screen()
                 print("Before touch, Apple Vision from the simulator display:", before[:680], flush=True)
+                guide_markers = ("docker-only application startup", "docker-only", "git clone", "cd onesa-ai-platform", "all commands below run", "reproducible review", "compose v2", "python3 scripts/bootstrap")
+                if any(marker in before for marker in guide_markers):
+                    return {"passed": False, "reason": "homepage precondition still shows guide content", "result": target}
                 payload = {"actions":[{"type":"pointer","id":"finger","parameters":{"pointerType":"touch"},"actions":[
                     {"type":"pointerMove","duration":0,"origin":"viewport","x":point["x"],"y":point["y"]},
                     {"type":"pointerDown","button":0},{"type":"pause","duration":100},{"type":"pointerUp","button":0}]}]}
@@ -195,8 +222,14 @@ print((request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.j
                         print("After touch, Apple Vision from the simulator display:", after[:840], flush=True)
                         # The linked guide's numbered section is absent from
                         # the closed and open search overlays on the homepage.
-                        if "developer quickstart" in after and any(marker in after and marker not in before for marker in ("docker-only application startup","docker-only","git clone","cd onesa-ai-platform","all commands below run","reproducible review","compose v2","python3 scripts/bootstrap")):
-                            return {"passed":True,"activation":"native Safari touch; independent display OCR","result":target}
+                        try:
+                            after_url = urlsplit(run("GET", "/url"))
+                        except (OSError, RuntimeError):
+                            after_url = None
+                        changed_to_guide = after_url is not None and after_url.hostname == "docs.onesa.eu" and after_url.path == "/docs/public/quickstart"
+                        unique_guide_content = any(marker in after and marker not in before for marker in guide_markers)
+                        if "developer quickstart" in after and (changed_to_guide or unique_guide_content):
+                            return {"passed":True,"activation":"native Safari touch; independent display OCR","url":after_url.geturl() if after_url else None,"result":target}
                     try:
                         touch.result()
                     except (OSError, RuntimeError) as error:
