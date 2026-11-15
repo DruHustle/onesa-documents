@@ -210,6 +210,45 @@ class Journeys(unittest.TestCase):
             401,
         )
 
+    def test_superseded_revision_attachment_is_not_downloadable(self):
+        # The current document's readers must not gain access to objects
+        # withdrawn from an earlier approved revision. Preserve the object
+        # and provenance for audit; deny the public download route.
+        with catalog.connection(self.database) as db:
+            db.execute(
+                "INSERT INTO revisions VALUES(?,?,?,?,?,?,?,?)",
+                (
+                    "old-42",
+                    "03",
+                    EDITOR,
+                    "2026-11-15T00:00:00Z",
+                    "Redacted drawing",
+                    "Current approved content without the old attachment",
+                    "",
+                    1,
+                ),
+            )
+            db.execute(
+                "UPDATE documents SET current='03' WHERE id='old-42'"
+            )
+        for uid in (MEMBER, EDITOR):
+            headers = self.bearer(uid)
+            metadata = self.client.get("/api/documents/old-42", headers=headers)
+            self.assertEqual(metadata.status_code, 200)
+            self.assertEqual(metadata.json()["revision"], "03")
+            self.assertEqual(metadata.json()["attachments"], [])
+            old = self.client.get("/api/attachments/drawing42", headers=headers)
+            self.assertEqual(old.status_code, 404)
+            self.assertNotIn(self.attachment, old.content)
+        with catalog.connection(self.database) as db:
+            # Historical bytes and revision attribution remain in private storage.
+            self.assertEqual(
+                db.execute(
+                    "SELECT count(*) FROM attachments WHERE id='drawing42'"
+                ).fetchone()[0],
+                1,
+            )
+
     def test_editor_draft_vs_reader(self):
         payload = {
             "base_revision": "02",
