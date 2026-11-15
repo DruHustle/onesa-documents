@@ -363,6 +363,28 @@ class Journeys(unittest.TestCase):
                 db.execute("SELECT count(*) FROM imports").fetchone()[0], 1
             )
 
+    def test_snapshot_import_rejects_corrupt_existing_attachment_object(self):
+        from copy import deepcopy
+
+        # A second reconciled document may reference bytes already stored.
+        # A matching digest key is insufficient if stored object bytes differ.
+        second = deepcopy(self.batch["documents"][0])
+        second["id"] = "second-doc"
+        second["bookmark"] = "/docs/new/copy"
+        second["revisions"][0]["attachments"][0]["id"] = "drawing-copy"
+        self.batch["documents"] = [second]
+        with catalog.connection(self.database) as db:
+            db.execute("UPDATE objects SET bytes=?", (b"corrupted bytes",))
+        with self.assertRaisesRegex(ValueError, "Existing attachment object checksum mismatch"):
+            self.upload()
+        with catalog.connection(self.database) as db:
+            self.assertEqual(
+                db.execute("SELECT count(*) FROM documents").fetchone()[0], 1
+            )
+            self.assertEqual(
+                db.execute("SELECT count(*) FROM imports").fetchone()[0], 1
+            )
+
     def test_expired_editor_preserves_unsaved_form_and_role_downgrade(self):
         payload = {
             "base_revision": "02",
