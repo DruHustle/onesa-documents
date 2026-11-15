@@ -47,6 +47,12 @@ class Keys:
             now = self.clock()
             try:
                 cached = json.loads(self.file.read_bytes())
+                if (
+                    not isinstance(cached, dict)
+                    or not isinstance(cached.get("time"), (int, float))
+                    or not isinstance(cached.get("keys"), dict)
+                ):
+                    raise ValueError("Invalid local JWKS cache")
             except (OSError, ValueError):
                 cached = {"time": 0, "keys": {}}
             age = now - cached["time"]
@@ -72,7 +78,7 @@ class Keys:
                         json.dump(record, f)
                     os.replace(f.name, self.file)
                     cached, age = record, 0
-                except (httpx.HTTPError, OSError, ValueError, KeyError, jwt.PyJWTError):
+                except (httpx.HTTPError, OSError, ValueError, TypeError, AttributeError, KeyError, jwt.PyJWTError):
                     if not (0 <= age < 86400 and kid in cached["keys"]):
                         raise KeysUnavailable()
             if not (0 <= age < 86400):

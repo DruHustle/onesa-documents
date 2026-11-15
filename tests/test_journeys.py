@@ -331,6 +331,21 @@ class Journeys(unittest.TestCase):
             self.start().get("/api/documents", headers=headers).status_code, 503
         )
 
+    def test_corrupt_jwks_cache_and_invalid_provider_reply_fail_closed(self):
+        # Corrupt but valid JSON on disk must never yield a 500 error or
+        # authorize a token, even when the identity provider is unavailable.
+        self.online = False
+        self.keys.file.write_text('{"time":"not-a-number","keys":[]}')
+        response = self.client.get("/api/documents", headers=self.bearer())
+        self.assertEqual(response.status_code, 503)
+
+        # A malformed JWKS provider response is also an unavailable-key
+        # condition, not an unhandled exception or an accepted signature.
+        self.keys.last_attempt = -1e20
+        self.keys.fetch = lambda: {"keys": None}
+        response = self.client.get("/api/documents", headers=self.bearer())
+        self.assertEqual(response.status_code, 503)
+
     def test_import_replay_and_atomic_conflict(self):
         self.assertEqual(self.upload(), {"already_imported": True})
         self.batch["documents"][0]["id"] = "another"
