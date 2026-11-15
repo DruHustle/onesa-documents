@@ -10,19 +10,32 @@ final class PublicGuideTests: XCTestCase {
 
         // The responsive navbar includes another search field in its collapsed sidebar.
         // Bind each gesture to the field Safari can hit on the current viewport.
-        let fields = web.textFields.matching(NSPredicate(
+        // iOS 26.5 Safari may expose <input type="search"> as a
+        // searchField/Other element rather than a textField. Search the full
+        // accessibility subtree, then still require a hittable native input.
+        let fields = web.descendants(matching: .any).matching(NSPredicate(
             format: "label CONTAINS[c] %@ OR placeholderValue CONTAINS[c] %@", "Search", "Search docs"
         ))
         func visibleField() -> XCUIElement? {
-            fields.allElementsBoundByIndex.first { $0.isHittable }
+            fields.allElementsBoundByIndex.first {
+                $0.isHittable && ($0.elementType == .searchField || $0.elementType == .textField)
+            }
         }
         let deadline = Date().addingTimeInterval(30)
         while visibleField() == nil && Date() < deadline {
             RunLoop.current.run(until: Date().addingTimeInterval(0.25))
         }
-        try XCTUnwrap(visibleField(), "The public page did not expose its visible search field").tap()
+        guard let initialField = visibleField() else {
+            let snapshot = web.descendants(matching: .any).allElementsBoundByIndex.prefix(80)
+                .map { "\($0.elementType):\($0.label):\($0.placeholderValue ?? "")" }
+                .joined(separator: " | ")
+            XCTFail("The public page did not expose a visible native search field. AX: \(snapshot)")
+            return
+        }
+        initialField.tap()
 
         let input = try XCTUnwrap(visibleField(), "The visible search field disappeared after opening")
+        print("PUBLIC_SEARCH_FIELD type=\(input.elementType) label=\(input.label) placeholder=\(input.placeholderValue ?? "")")
         input.tap()
         input.typeText("quickstart")
         let typed = XCTNSPredicateExpectation(
