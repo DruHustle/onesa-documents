@@ -95,7 +95,7 @@ def main():
 
             def reached():
                 current = urlsplit(run("GET", "/url"))
-                if current.hostname == target.hostname and current.path == target.path:
+                if current.hostname == target.hostname:
                     return current
                 if current.hostname in redirect_hosts:
                     return current
