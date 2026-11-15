@@ -68,7 +68,12 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         raise ValueError("docs.onesa.eu is reserved for public documents")
     if urlsplit(origin).hostname.rstrip(".").lower() == "docs.engineering.onesa.eu":
         raise ValueError("The legacy engineering hostname is retired")
-    if cfg.get("DOCS_ENVIRONMENT") == "production" and (
+    # An unset or mistyped environment must not silently disable production
+    # origin/issuer restrictions. Only explicit staging enables nonproduction URLs.
+    environment = cfg.get("DOCS_ENVIRONMENT", "production")
+    if environment not in ("production", "staging"):
+        raise ValueError("DOCS_ENVIRONMENT must be production or staging")
+    if environment == "production" and (
         origin != "https://docs.internal.onesa.eu" or issuer != "https://auth.onesa.eu/"
     ):
         raise ValueError(

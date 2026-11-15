@@ -44,6 +44,7 @@ class Journeys(unittest.TestCase):
             "DOCS_CLIENT_ID": "docs-web",
             "DOCS_CLIENT_SECRET": "in-memory-fixture",
             "DOCS_DATA": self.tmp.name,
+            "DOCS_ENVIRONMENT": "staging",
         }
         self.client = self.start()
         self.database = self.root / "documents.sqlite"
@@ -458,6 +459,28 @@ class Journeys(unittest.TestCase):
             ).status_code,
             403,
         )
+
+    def test_environment_guard_fails_closed_for_unknown_or_missing_values(self):
+        # Without an explicit staging opt-in, a forgotten/mistyped deployment
+        # flag must never relax the canonical production hostname restriction.
+        for env in (None, "", "Production", "prod", "development"):
+            config = dict(self.cfg)
+            if env is None:
+                config.pop("DOCS_ENVIRONMENT")
+            else:
+                config["DOCS_ENVIRONMENT"] = env
+            with self.subTest(environment=env):
+                with self.assertRaisesRegex(ValueError, "DOCS_ENVIRONMENT|dedicated internal origin"):
+                    create(config)
+
+        # The guard also applies when an unknown mode carries apparently valid
+        # production hostnames, to avoid silent policy bypass via typos.
+        canonical = dict(
+            self.cfg, DOCS_ORIGIN="https://docs.internal.onesa.eu",
+            DOCS_ISSUER="https://auth.onesa.eu", DOCS_ENVIRONMENT="prod"
+        )
+        with self.assertRaisesRegex(ValueError, "DOCS_ENVIRONMENT"):
+            create(canonical)
 
     def test_permanent_public_and_internal_origins(self):
         for public in (
