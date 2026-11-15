@@ -36,7 +36,8 @@ final class PublicGuideTests: XCTestCase {
 
         let input = try XCTUnwrap(visibleField(), "The visible search field disappeared after opening")
         print("PUBLIC_SEARCH_FIELD type=\(input.elementType) label=\(input.label) placeholder=\(input.placeholderValue ?? "")")
-        input.tap()
+        // initialField.tap() already focused the visible native input.
+        // Tapping again can dismiss or move the Safari search overlay on iOS 26.
         input.typeText("quickstart")
         let typed = XCTNSPredicateExpectation(
             predicate: NSPredicate(format: "value == %@", "quickstart"), object: input
