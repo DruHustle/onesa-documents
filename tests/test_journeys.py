@@ -160,6 +160,41 @@ class Journeys(unittest.TestCase):
         self.assertEqual(self.auth["code_challenge_method"], ["S256"])
         return "/callback?code=fixture-code&state=" + self.auth["state"][0]
 
+    def test_production_cannot_bootstrap_missing_or_empty_document_store(self):
+        # A missing volume after a restart is an outage, not a new empty
+        # organization. Startup must refuse to create a replacement catalog.
+        root = self.root / "missing-production-volume"
+        root.mkdir()
+        database = root / "documents.sqlite"
+        config = dict(
+            self.cfg, DOCS_ENVIRONMENT="production",
+            DOCS_ORIGIN="https://docs.internal.onesa.eu",
+            DOCS_ISSUER="https://auth.onesa.eu",
+            DOCS_DATA=str(root),
+        )
+        with self.assertRaisesRegex(RuntimeError, "store missing"):
+            create(config)
+        self.assertFalse(database.exists())
+        database.touch()
+        with self.assertRaisesRegex(RuntimeError, "store missing"):
+            create(config)
+        self.assertEqual(database.stat().st_size, 0)
+
+        # An unrelated SQLite DB is also not a valid restored private catalog.
+        with catalog.connection(database) as db:
+            db.execute("CREATE TABLE unrelated(value TEXT)")
+        with self.assertRaisesRegex(RuntimeError, "schema missing"):
+            create(config)
+        with catalog.connection(database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM sqlite_master WHERE type='table'").fetchone()[0], 1)
+
+        # Explicit provisioning of the real catalog permits production startup.
+        catalog.initialize(database)
+        app = create(config)
+        production = TestClient(app, base_url="https://docs.internal.onesa.eu")
+        self.addCleanup(production.close)
+        self.assertEqual(production.get("/readyz").status_code, 200)
+
     def test_readiness_fails_closed_when_private_database_volume_disappears(self):
         self.assertEqual(self.client.get("/healthz").status_code, 200)
         self.assertEqual(self.client.get("/readyz").status_code, 200)
