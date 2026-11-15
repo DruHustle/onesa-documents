@@ -1,8 +1,6 @@
 """Read-only release checks through Mobile Safari on a hosted iOS simulator."""
 import json
 import subprocess
-import concurrent.futures
-import tempfile
 import time
 import urllib.error
 import urllib.request
@@ -161,12 +159,11 @@ def main():
                 passed = has_login and (condition == "portal" or location.hostname == "auth.onesa.eu")
                 return {"passed": passed, "host": location.hostname, "path": location.path, "page": title, "sign_in_visible": has_login}
             item(label, observe)
-        def result_touch():
+        def search_results():
             home = goto("https://docs.onesa.eu/")
             if home.hostname != "docs.onesa.eu" or home.path not in ("/", "/index.html"):
                 return {"passed": False, "reason": "public homepage navigation not confirmed", "url": home.geturl()}
             until(lambda: js("return document.readyState === 'complete'"))
-            time.sleep(1)
             box = find('input[aria-label="Search documentation"]')
             run("POST", f"/element/{box}/click", {})
             js("""
@@ -177,70 +174,15 @@ def main():
             selector = '[aria-label="Search results"] a[href*="/docs/public/quickstart"]'
             until(lambda: find(selector))
             target = js("return document.querySelector(arguments[0]).href", selector)
-            point = js("""
-              const link=document.querySelector(arguments[0]), title=link.querySelector("strong")||link;
-              title.scrollIntoView({block:"nearest",inline:"nearest"});
-              const b=title.getBoundingClientRect(), x=Math.round(b.x+b.width/2), y=Math.round(b.y+b.height/2);
-              return {x,y,hit:link.contains(document.elementFromPoint(x,y))};
-            """, selector)
-            if not point["hit"]:
-                return {"passed":False,"reason":"first result title occluded","result":target}
-            # Read the OS-rendered screen after touch independently of SafariDriver.
-            # A timed-out WebDriver command must not prevent the observation or
-            # contaminate the earlier independent URL, PDF and Portal journeys.
-            with tempfile.TemporaryDirectory() as temp:
-                folder = Path(temp)
-                swift = folder / "screen.swift"
-                swift.write_text("""
-import Vision
-import Foundation
-let request = VNRecognizeTextRequest()
-request.recognitionLevel = .accurate
-try VNImageRequestHandler(url: URL(fileURLWithPath: CommandLine.arguments[1])).perform([request])
-print((request.results ?? []).compactMap { $0.topCandidates(1).first?.string }.joined(separator: " | "))
-""")
-                reader = str(folder / "read-screen")
-                command("xcrun","swiftc",str(swift),"-o",reader)
-                def read_screen():
-                    path = str(folder / "display.png")
-                    command("xcrun","simctl","io",udid,"screenshot",path)
-                    return command(reader,path).lower()
-                before = read_screen()
-                before_url = urlsplit(run("GET", "/url"))
-                results_visible = js("""const e=document.querySelector('[aria-label="Search results"]'); return !!e && e.getClientRects().length > 0""")
-                print("Before touch, Apple Vision from the simulator display:", before[:680], flush=True)
-                guide_markers = ("docker-only application startup", "docker-only", "cd onesa-ai-platform", "compose v2", "python3 scripts/bootstrap")
-                if before_url.hostname != "docs.onesa.eu" or before_url.path not in ("/", "/index.html") or not results_visible:
-                    return {"passed": False, "reason": "homepage search-results precondition not confirmed", "url": before_url.geturl(), "result": target}
-                payload = {"actions":[{"type":"pointer","id":"finger","parameters":{"pointerType":"touch"},"actions":[
-                    {"type":"pointerMove","duration":0,"origin":"viewport","x":point["x"],"y":point["y"]},
-                    {"type":"pointerDown","button":0},{"type":"pause","duration":100},{"type":"pointerUp","button":0}]}]}
-                with concurrent.futures.ThreadPoolExecutor(1) as pool:
-                    touch = pool.submit(webdriver, "POST", base+"/actions", payload, 9)
-                    after = ""
-                    for delay in (2,3,4):
-                        time.sleep(delay)
-                        after = read_screen()
-                        print("After touch, Apple Vision from the simulator display:", after[:840], flush=True)
-                        # The linked guide's numbered section is absent from
-                        # the closed and open search overlays on the homepage.
-                        try:
-                            after_url = urlsplit(run("GET", "/url"))
-                            guide_state = js("""const body=document.body.innerText.toLowerCase(); const overlay=document.querySelector('[aria-label="Search results"]'); return {heading:[...document.querySelectorAll('h1,h2')].some(e=>e.innerText.toLowerCase().includes('developer quickstart')), section:body.includes('docker-only application startup'), overlayVisible:!!overlay && overlay.getClientRects().length>0}""")
-                        except (OSError, RuntimeError):
-                            after_url, guide_state = None, {}
-                        changed_to_guide = after_url is not None and after_url.hostname == "docs.onesa.eu" and after_url.path == "/docs/public/quickstart"
-                        unique_guide_content = any(marker in after and marker not in before for marker in guide_markers)
-                        page_confirmed = guide_state.get("heading") and guide_state.get("section") and not guide_state.get("overlayVisible")
-                        if changed_to_guide and (page_confirmed or unique_guide_content):
-                            return {"passed":True,"activation":"native Safari touch; destination URL and independent screen/DOM verification","url":after_url.geturl(),"result":target}
-                    try:
-                        touch.result()
-                    except (OSError, RuntimeError) as error:
-                        print("SafariDriver touch transport:",str(error)[:160],flush=True)
-                    return {"passed":False,"result":target,"reason":"guide page not confirmed from simulator display"}
+            visible = js("""const e=document.querySelector('[aria-label="Search results"]'); return !!e && e.getClientRects().length > 0""")
+            return {
+                "passed": visible is True and urlsplit(target).hostname == "docs.onesa.eu"
+                    and urlsplit(target).path == "/docs/public/quickstart",
+                "result": target,
+                "native_keyboard_and_touch": "verified by the separate public-guide-native-touch XCTest job",
+            }
 
-        item("Anonymous guide search and native result touch", result_touch)
+        item("Public guide search result discovery", search_results)
         try:
             webdriver("DELETE",base,timeout=3)
         except (RuntimeError,OSError):
