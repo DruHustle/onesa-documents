@@ -18,6 +18,20 @@ jobs:
           persist-credentials: false
       - name: Run anonymous release journeys in the iPhone simulator
         run: python3 tests/mobile_safari_release.py
+      - name: Capture failed Mobile Safari simulator display
+        if: failure()
+        run: |
+          mkdir -p "$RUNNER_TEMP/safari-diagnostics"
+          xcrun simctl io booted screenshot "$RUNNER_TEMP/safari-diagnostics/simulator.png" || true
+          xcrun simctl list devices booted > "$RUNNER_TEMP/safari-diagnostics/booted-devices.txt" || true
+      - name: Retain failed Safari diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: public-docs-mobile-safari-diagnostics
+          path: ${{ runner.temp }}/safari-diagnostics/
+          if-no-files-found: warn
+          retention-days: 3
 
   public-guide-native-touch:
     runs-on: macos-26-intel
@@ -42,3 +56,11 @@ jobs:
           xcodebuild test -project "$work/host/InstalledClient.xcodeproj" -scheme InstalledClient \
             -destination "platform=iOS Simulator,id=$device" -parallel-testing-enabled NO \
             CODE_SIGNING_ALLOWED=YES CODE_SIGN_IDENTITY=- -derivedDataPath "$work/build" -resultBundlePath "$work/results.xcresult"
+      - name: Retain failed native Safari XCTest diagnostics
+        if: failure()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9
+        with:
+          name: public-docs-native-safari-xcresult
+          path: ${{ runner.temp }}/public-docs-native/results.xcresult/
+          if-no-files-found: warn
+          retention-days: 3
