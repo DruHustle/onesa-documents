@@ -53,13 +53,19 @@ final class PublicGuideTests: XCTestCase {
         // the XCTest accessibility tree (see failed run 43664871821). Find a
         // visible result by its accessible label, but still require a real tap
         // and the guide's unique post-navigation content before passing.
-        let candidates = safari.descendants(matching: .any).matching(NSPredicate(
-            format: "label CONTAINS[c] %@", "Developer quickstart"
+        let region = web.descendants(matching: .any).matching(NSPredicate(
+            format: "label BEGINSWITH[c] %@", "Search results"
+        )).firstMatch
+        XCTAssertTrue(region.waitForExistence(timeout: 15))
+        let candidates = region.descendants(matching: .any).matching(NSPredicate(
+            format: "label BEGINSWITH[c] %@", "Developer quickstart"
         ))
         let resultDeadline = Date().addingTimeInterval(35)
         var visibleResult: XCUIElement?
         while Date() < resultDeadline {
-            visibleResult = candidates.allElementsBoundByIndex.first { $0.isHittable }
+            let matches = candidates.allElementsBoundByIndex
+            visibleResult = matches.first { $0.elementType == .link && $0.isHittable }
+                ?? matches.first { $0.elementType == .other && $0.isHittable }
             if visibleResult != nil { break }
             RunLoop.current.run(until: Date().addingTimeInterval(0.5))
         }
@@ -68,7 +74,32 @@ final class PublicGuideTests: XCTestCase {
             return
         }
         print("PUBLIC_GUIDE_NATIVE_SEARCH_RESULT_FOUND")
-        result.tap()
+        // Safari can return an activation point on the screen edge for a wide
+        // search result at keyboard zoom. Tap the inside of the visible card.
+        var visible = result.frame.intersection(region.frame).intersection(web.frame).intersection(safari.frame)
+        if keyboard.exists {
+            let keys = keyboard.frame
+            if !keys.isEmpty && keys.intersects(visible) {
+                visible.size.height = max(0, keys.minY - visible.minY)
+            }
+        }
+        for toolbar in safari.toolbars.allElementsBoundByIndex {
+            let covered = visible.intersection(toolbar.frame)
+            if covered.isNull || covered.isEmpty { continue }
+            let above = covered.minY - visible.minY
+            let below = visible.maxY - covered.maxY
+            if above >= below {
+                visible.size.height = above
+            } else {
+                visible.origin.y = covered.maxY
+                visible.size.height = below
+            }
+        }
+        XCTAssertGreaterThan(visible.width, 8)
+        XCTAssertGreaterThan(visible.height, 8)
+        let origin = safari.frame.origin
+        let point = CGVector(dx: visible.midX - origin.x, dy: visible.midY - origin.y)
+        safari.coordinate(withNormalizedOffset: .zero).withOffset(point).tap()
         let guide = web.descendants(matching: .any).matching(NSPredicate(
             format: "label CONTAINS[c] %@", "Docker-only application startup"
         )).firstMatch
