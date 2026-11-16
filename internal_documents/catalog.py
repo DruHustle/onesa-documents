@@ -29,6 +29,30 @@ CREATE TABLE IF NOT EXISTS attachments(
 CREATE TABLE IF NOT EXISTS imports(digest TEXT PRIMARY KEY);
 """
 
+# Readiness must validate the schema used by every production query, not merely
+# check that table names exist. SQLite accepts tables with the right names but
+# missing columns; SELECT 1 would report those databases as ready before the
+# first customer request failed with an unhandled OperationalError.
+REQUIRED_COLUMNS = {
+    "documents": {"id", "product", "discipline", "author", "bookmark", "current", "collection"},
+    "revisions": {"document", "id", "author", "created", "title", "body", "source", "approved"},
+    "grants": {"document", "principal", "permission"},
+    "objects": {"digest", "bytes"},
+    "attachments": {"id", "document", "revision", "name", "digest"},
+    "imports": {"digest"},
+    "challenges": {"state", "binding", "verifier", "nonce", "destination", "expires"},
+    "sessions": {"id", "access_token", "expires"},
+}
+
+
+def verify_schema(db):
+    """Raise DatabaseError unless every production table has its required columns."""
+    for table, required in REQUIRED_COLUMNS.items():
+        actual = {row["name"] for row in db.execute(f"PRAGMA table_info({table})")}
+        if not required.issubset(actual):
+            raise sqlite3.DatabaseError(f"Private Documents schema is invalid: {table}")
+
+
 
 def identifier(value):
     if not isinstance(value, str) or not re.fullmatch(
@@ -39,8 +63,11 @@ def identifier(value):
 
 
 @contextmanager
-def connection(path):
-    db = sqlite3.connect(path, timeout=15)
+def connection(path, *, timeout=15):
+    path = Path(path)
+    if path.is_symlink():
+        raise sqlite3.OperationalError("Private Documents database must not be a symlink")
+    db = sqlite3.connect(path, timeout=timeout)
     db.row_factory = sqlite3.Row
     db.execute("PRAGMA foreign_keys=ON")
     try:
@@ -73,6 +100,9 @@ def import_snapshot(path, manifest, digest):
     batch = json.loads(data)
     if batch["schema"] != 1:
         raise ValueError("Unsupported document manifest")
+    legacy_engineering = batch.get("legacy_engineering", False)
+    if not isinstance(legacy_engineering, bool):
+        raise ValueError("Invalid legacy engineering attestation")
     totals = {"documents": 0, "revisions": 0, "attachments": 0, "grants": 0}
     with connection(path) as db:
         db.execute("BEGIN IMMEDIATE")
@@ -88,7 +118,14 @@ def import_snapshot(path, manifest, digest):
                 or any(part in (".", "..", "") for part in bookmark.split("/")[2:])
             ):
                 raise ValueError("Unsupported legacy bookmark")
-            collection = doc.get("collection", "engineering")
+            if "collection" not in doc:
+                if not legacy_engineering:
+                    raise ValueError("Every new document requires an explicit collection")
+                collection = "engineering"
+            else:
+                collection = doc["collection"]
+                if legacy_engineering and collection != "engineering":
+                    raise ValueError("Legacy engineering exports cannot contain other collections")
             if not isinstance(collection, str) or not re.fullmatch(
                 r"[a-z][a-z0-9-]{0,63}", collection
             ):

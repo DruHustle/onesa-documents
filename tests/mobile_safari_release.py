@@ -144,21 +144,46 @@ def main():
             return {**result, "passed": result.get("status") == 200 and result.get("digest") == expected}
         item("Anonymous fetch of the linked public PDF", public_pdf)
 
-        for label, url, condition in [
-            ("Company Portal signed-out administration", "https://portal.onesa.eu/admin", "portal"),
-            ("Internal documents authentication entry", "https://docs.internal.onesa.eu/", "internal"),
-            ("Direct Identity sign-in", "https://auth.onesa.eu/", "identity"),
-        ]:
-            def observe(url=url, condition=condition):
-                location = goto(url, redirect_hosts=("auth.onesa.eu",) if condition == "internal" else ())
-                time.sleep(3)
-                location = urlsplit(run("GET", "/url"))
-                title = run("GET", "/title")
-                text = js("return document.body.innerText.toLowerCase().slice(0,5000)")
-                has_login = any(word in text for word in ("sign in", "log in", "continue with", "sign-in"))
-                passed = has_login and (condition == "portal" or location.hostname == "auth.onesa.eu")
-                return {"passed": passed, "host": location.hostname, "path": location.path, "page": title, "sign_in_visible": has_login}
-            item(label, observe)
+        def portal_entry():
+            goto("https://portal.onesa.eu/admin")
+            def visible_sign_in():
+                return js("""return /sign in|log in|continue with|sign-in/i.test(document.body.innerText)""")
+            until(visible_sign_in)
+            location = urlsplit(run("GET", "/url"))
+            return {"passed": location.hostname == "portal.onesa.eu",
+                    "host": location.hostname, "path": location.path, "sign_in_visible": True}
+        item("Company Portal signed-out administration", portal_entry)
+
+        def internal_entry():
+            # A real protected bookmark starts a fresh, browser-bound transaction.
+            # The bare issuer hostname redirects to the company homepage.
+            goto("https://docs.internal.onesa.eu/", redirect_hosts=("auth.onesa.eu",))
+            def provider_location():
+                current = urlsplit(run("GET", "/url"))
+                if current.scheme == "https" and current.hostname == "auth.onesa.eu":
+                    return current
+            location = until(provider_location, seconds=30)
+            return {"passed": True, "host": location.hostname, "path": location.path}
+        item("Internal Documents starts Onesa sign-in", internal_entry)
+
+        def identity_entry():
+            def login_form():
+                current = urlsplit(run("GET", "/url"))
+                if current.scheme != "https" or current.hostname != "auth.onesa.eu":
+                    return None
+                visible = js("""
+                    const form = [...document.forms].find(form => form.getClientRects().length &&
+                      [...form.querySelectorAll('input, button')].some(control =>
+                        control.getClientRects().length && !control.disabled &&
+                        ['email', 'text', 'password', 'submit'].includes(control.type)));
+                    return Boolean(form) && /sign in|log in|continue|welcome/i.test(document.body.innerText);
+                """)
+                return current if visible else None
+            location = until(login_form, seconds=30)
+            return {"passed": True, "host": location.hostname, "path": location.path,
+                    "sign_in_form_visible": True}
+        item("Onesa Identity displays sign-in for Internal Documents", identity_entry)
+
         def search_results():
             home = goto("https://docs.onesa.eu/")
             if home.hostname != "docs.onesa.eu" or home.path not in ("/", "/index.html"):

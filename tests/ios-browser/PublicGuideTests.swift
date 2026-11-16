@@ -32,18 +32,26 @@ final class PublicGuideTests: XCTestCase {
             XCTFail("The public page did not expose a visible native search field. AX: \(snapshot)")
             return
         }
-        initialField.tap()
-
-        let input = try XCTUnwrap(visibleField(), "The visible search field disappeared after opening")
-        print("PUBLIC_SEARCH_FIELD type=\(input.elementType) label=\(input.label) placeholder=\(input.placeholderValue ?? "")")
-        // initialField.tap() already focused the visible native input.
-        // Tapping again can dismiss or move the Safari search overlay on iOS 26.
-        input.typeText("quickstart")
-        let typed = XCTNSPredicateExpectation(
-            predicate: NSPredicate(format: "value == %@", "quickstart"), object: input
-        )
-        XCTAssertEqual(XCTWaiter.wait(for: [typed], timeout: 10), .completed,
-                       "The real iPhone keyboard did not enter the expected search")
+        // Safari can expose both navbar copies of the input. Once the viewport
+        // moves for the keyboard, an index-based field can resolve to the other
+        // copy. Send key taps to the keyboard, then check the visible field.
+        initialField.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        let keyboard = safari.keyboards.firstMatch
+        if !keyboard.waitForExistence(timeout: 8) {
+            let field = try XCTUnwrap(visibleField(), "The search field disappeared")
+            field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+        }
+        XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "Tapping search did not open the iPhone keyboard")
+        for letter in "quickstart" {
+            let key = keyboard.keys.matching(NSPredicate(
+                format: "label ==[c] %@ OR identifier ==[c] %@", String(letter), String(letter)
+            )).firstMatch
+            XCTAssertTrue(key.waitForExistence(timeout: 5), "The iPhone keyboard did not offer the expected key")
+            key.tap()
+        }
+        let typed = fields.matching(NSPredicate(format: "value ==[c] %@", "quickstart")).firstMatch
+        XCTAssertTrue(typed.waitForExistence(timeout: 10) && typed.isHittable,
+                      "The visible documentation search did not receive the keyboard input")
         // iOS 26 Safari may classify web links as Other rather than Link in
         // the XCTest accessibility tree (see failed run 43664871821). Find a
         // visible result by its accessible label, but still require a real tap

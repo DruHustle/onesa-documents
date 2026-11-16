@@ -28,7 +28,10 @@ def hash_value(value):
 
 
 def safe_destination(value):
-    u = urlsplit(value)
+    try:
+        u = urlsplit(value)
+    except ValueError as exc:
+        raise HTTPException(400, "Invalid document return address") from exc
     if (
         u.scheme
         or u.netloc
@@ -86,14 +89,31 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         )
     audience = cfg["DOCS_AUDIENCE"]
     client = cfg["DOCS_CLIENT_ID"]
-    secret = cfg["DOCS_CLIENT_SECRET"]
+    secret_path = cfg.get("DOCS_CLIENT_SECRET_FILE")
+    if secret_path is not None:
+        if "DOCS_CLIENT_SECRET" in cfg:
+            raise ValueError("Configure exactly one Docs client secret source")
+        secret = Path(secret_path).read_text(encoding="utf-8").rstrip("\r\n")
+    else:
+        secret = cfg["DOCS_CLIENT_SECRET"]
     if not all([audience, client, secret]) or audience == client:
         raise ValueError(
             "Configure a distinct Docs API audience and confidential web client"
         )
     directory = Path(cfg["DOCS_DATA"]).resolve()
     directory.mkdir(mode=0o700, parents=True, exist_ok=True)
+    # DOCS_DATA can be an existing mounted volume; mkdir(mode=...) does not
+    # tighten its permissions when it already exists. This directory holds
+    # access tokens, ACLs, drafts and issuer signing-key cache files.
+    try:
+        os.chmod(directory, 0o700)
+        if directory.stat().st_mode & 0o077:
+            raise OSError("private directory remains accessible to group/other")
+    except OSError as exc:
+        raise RuntimeError("Cannot secure private Documents data directory") from exc
     database = directory / "documents.sqlite"
+    if database.is_symlink():
+        raise RuntimeError("Private Documents database must not be a symlink")
     # The private mount may disappear across a production restart. Never
     # silently bootstrap a replacement empty catalog on the container disk:
     # an empty store could look healthy while documents and ACLs are gone.
@@ -115,12 +135,24 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         except sqlite3.Error as exc:
             raise RuntimeError("Production Documents store invalid; restore the private volume") from exc
     catalog.initialize(database)
+    # Also restrict an existing database file. The containing directory is
+    # private, but file mode is defense in depth for backups and mount changes.
+    try:
+        os.chmod(database, 0o600)
+        if database.stat().st_mode & 0o077:
+            raise OSError("private database remains accessible to group/other")
+    except OSError as exc:
+        raise RuntimeError("Cannot secure private Documents database") from exc
     keys = keys or Keys(issuer, directory, clock=clock)
     with catalog.connection(database) as db:
         db.executescript("""CREATE TABLE IF NOT EXISTS challenges(
             state TEXT PRIMARY KEY,binding TEXT NOT NULL,verifier TEXT NOT NULL, nonce TEXT NOT NULL,
             destination TEXT NOT NULL,expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,access_token TEXT NOT NULL,expires INTEGER NOT NULL);""")
+        try:
+            catalog.verify_schema(db)
+        except sqlite3.DatabaseError as exc:
+            raise RuntimeError("Private Documents schema invalid; restore the private volume") from exc
     app = FastAPI(docs_url=None, redoc_url=None, openapi_url=None)
 
     @app.middleware("http")
@@ -140,9 +172,10 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         auth = request.headers.get("authorization", "")
         token = None
         if auth:
-            if not auth.startswith("Bearer "):
+            scheme, separator, credential = auth.partition(" ")
+            if not separator or scheme.casefold() != "bearer" or not credential.strip():
                 raise HTTPException(401, "Bearer token required")
-            token = auth[7:]
+            token = credential.strip()
         else:
             with catalog.connection(database) as db:
                 s = db.execute(
@@ -198,15 +231,11 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         # Liveness must stay independent from the private store. Readiness,
         # however, must fail if a persistent volume disappears or SQLite is
         # unavailable; never let SQLite silently create an empty replacement.
-        if not database.is_file():
+        if database.is_symlink() or not database.is_file():
             raise HTTPException(503, "Document store unavailable")
         try:
-            with catalog.connection(database) as db:
-                for table in (
-                    "documents", "revisions", "grants", "objects",
-                    "attachments", "imports", "challenges", "sessions",
-                ):
-                    db.execute(f"SELECT 1 FROM {table} LIMIT 1").fetchone()
+            with catalog.connection(database, timeout=1) as db:
+                catalog.verify_schema(db)
                 db.execute("BEGIN IMMEDIATE")
                 db.rollback()
         except sqlite3.Error:
@@ -296,6 +325,17 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             if not code:
                 return page("Sign-in interrupted", retry)
             tokens = (exchange or get_tokens)(code, tx["verifier"])
+            # Treat malformed upstream JSON exactly like an unavailable token
+            # response. A non-object (or non-string token fields) previously
+            # raised TypeError here and escaped the outage response as HTTP 500.
+            if (
+                not isinstance(tokens, dict)
+                or not isinstance(tokens.get("id_token"), str)
+                or not tokens["id_token"]
+                or not isinstance(tokens.get("access_token"), str)
+                or not tokens["access_token"]
+            ):
+                raise ValueError("Invalid OIDC token response")
             profile = keys.verify(tokens["id_token"], client)
             access = keys.verify(tokens["access_token"], audience)
             if (
@@ -441,7 +481,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         if request.headers.get("origin") != origin:
             raise HTTPException(403, "Invalid Origin")
         if (
-            request.headers.get("content-type", "").split(";")[0]
+            request.headers.get("content-type", "").split(";", 1)[0].strip().lower()
             != "application/x-www-form-urlencoded"
         ):
             raise HTTPException(415, "Expected form data")
@@ -453,7 +493,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         try:
             form = parse_qs(
                 chunks.decode("utf-8"), max_num_fields=3, keep_blank_values=True,
-                errors="strict",
+                strict_parsing=True, errors="strict",
             )
             payload = Draft(
                 **{k: form[k][0] for k in ("base_revision", "title", "body")}

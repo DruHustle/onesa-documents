@@ -1,3 +1,4 @@
+**/.DS_Store
 __pycache__/
 *.sqlite*
 *.pyc
@@ -6,3 +7,8 @@ data/
 
 public/dist/
 .ruff_cache/
+objects/
+manifest*.json
+backups/
+*.sqlite-wal
+*.sqlite-shm

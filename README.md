@@ -21,18 +21,56 @@ Install `python -m pip install -r requirements.txt` with Python 3.12 and run `py
 | --- | --- |
 | DOCS_ISSUER | Exact HTTPS Auth0 custom domain. Production issuer is `https://auth.onesa.eu/`. |
 | DOCS_AUDIENCE | Dedicated resource identifier `https://api.docs.onesa.eu`. This identifier does not act as a content origin. |
-| DOCS_CLIENT_ID, DOCS_CLIENT_SECRET | Confidential web client registered only for the internal product and its exact environment-specific callback. |
+| DOCS_CLIENT_ID, DOCS_CLIENT_SECRET | Confidential web client registered for the internal product and its exact environment-specific callback. Set the secret directly or supply its file path in `DOCS_CLIENT_SECRET_FILE`. |
 | DOCS_ORIGIN | Production is `https://docs.internal.onesa.eu`. Use a protected separate hostname for staging. |
 | DOCS_ENVIRONMENT | The Docker image defaults to `production` and enforces the two canonical production origins. Explicitly override to `staging` only on isolated nonproduction deployments with their own OIDC client, hostname, and private data. |
-| DOCS_DATA | Private writable directory for document data and the issuer-specific public signing-key cache. |
+| DOCS_DATA | Private writable directory for document data and the issuer-specific public signing-key cache. The service enforces directory mode `0700` and SQLite database mode `0600`; startup fails if those restrictions cannot be applied. |
 
 The sign-in flow uses Authorization Code with S256 PKCE, nonce and one-use browser-bound state. Signed access tokens must match the configured issuer and resource. The Onesa UUID and scoped products/roles are namespaced claims. The canonical grant is `internal-documents`. Previously approved `engineering-documents` identities remain eligible **only for the engineering collection** and still require per-document ACLs. Search, metadata, preview, drafts and attachment downloads apply the same restriction. HR access requires an explicit ACL plus canonical Internal Documents access. Portal and Identity administrators inherit no document grants.
+
+## Deploy Internal Documents on the Oracle host
+
+Use the existing host's Docker Engine, Compose v2 and host-network Cloudflare Tunnel. Set these deployment values on the Oracle host:
+
+| Variable | Value |
+| --- | --- |
+| `DOCS_HOST_PORT` | Port reserved for Documents on host loopback. Check existing listeners and container port mappings before assigning it. |
+| `DOCS_VOLUME` | Absolute path on the encrypted private volume containing the restored catalog or reviewed import described below. The directory and database must be writable by container UID 10001. Compose requires an existing directory. |
+| `DOCS_CLIENT_ID` | Production Onesa Auth0 confidential Docs client ID, registered with callback `https://docs.internal.onesa.eu/callback` and the Docs API audience. |
+| `DOCS_CLIENT_SECRET_PATH` | Absolute path to that client's secret file, outside the checkout. Standalone Compose bind-mounts file-backed secrets. Restrict the file to UID 10001 with mode 0400, or use the equivalent host-mapped UID with a remapped Docker engine. |
+
+From the checked-out release revision, build the image on the Oracle host. The Dockerfile, dependencies and application source come from the same commit.
+
+```sh
+set -eu
+revision=$(git rev-parse HEAD)
+export DOCS_IMAGE="onesa-internal-documents:${revision}"
+git archive "$revision" Dockerfile requirements.txt internal_documents |
+  docker build --label "org.opencontainers.image.revision=$revision" -t "$DOCS_IMAGE" -
+```
+
+For a first import, run the private migration procedure below on the Oracle volume. Once the volume contains the catalog, start the service in the same shell. The image uses the database readiness probe on port 8000.
+
+```sh
+docker compose -f deploy/compose.oracle.yaml up -d --wait
+curl -fsS "http://127.0.0.1:$DOCS_HOST_PORT/readyz"
+```
+
+### Cloudflare edge for the internal hostname
+
+Deploy `deploy/cloudflare/internal-documents.mjs` as a module Worker in the Onesa account. Under **Settings → Domains & Routes**, attach the exact Custom Domain `docs.internal.onesa.eu`. Cloudflare creates the DNS record and certificate for this nested hostname. Disable the `workers.dev` and preview URLs. Keep request URLs and callback query strings out of Worker logs and traces.
+
+Until the Oracle service is ready, leave `DOCUMENTS_SERVICE` unbound. The Worker returns 503 on the canonical hostname without reading document data. This allows verification of DNS and the edge certificate before cutover.
+
+After confirming the private host's readiness, register a single HTTP VPC Service against the existing host-network Oracle production tunnel. Select its loopback IPv4 address `127.0.0.1` and the reserved HTTP port `DOCS_HOST_PORT` from the running Compose service. Under the Worker's **Bindings**, bind that VPC Service with the exact name `DOCUMENTS_SERVICE`. This hostname's DNS belongs to the Worker Custom Domain. The VPC binding reaches Oracle without a separate public tunnel hostname. See [Cloudflare Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) and [VPC Services](https://developers.cloudflare.com/workers-vpc/get-started/).
+
+Verify anonymous `/api/documents` returns 401, a protected bookmark redirects through Onesa sign-in, and a controlled reader sees only authorized documents after returning. Recheck downloaded bytes and retained bookmark paths against the private source. Removing the binding returns the edge to the 503 maintenance response while preserving the domain, certificate and stored documents. Retain the previous image and private backup for rollback.
 
 ## Inventory, import and recovery
 
 `inventory/engineering-material.csv` identifies 553 Git-tracked document candidates from nine Onesa repositories by full commit, path and blob hash. It grants neither editorial approval nor reader access. Reconcile protected engineering material, HR, operations, other departmental sources, effective ACLs, cloud storage, aliases and approved versions separately with their owners. Preserve source authorship, stable document/revision/attachment IDs, bookmarks and tenant ACLs. Do not put any private content into this repository, including the HR index at record level.
 
-Import an owner-reviewed manifest and objects with `python -m internal_documents DATABASE MANIFEST --sha256 EXPECTED_HASH`. Supply original IDs, document `collection`, product and discipline, original author, bookmark, revisions, approvals, original attachment IDs and digests and reviewed user ACLs. Store attachment bytes alongside the manifest as `objects/<sha256>`. The importer operates transactionally, checks independent counts and file hashes, and rejects conflicting existing records. Legacy schema-1 engineering exports without a collection migrate to engineering; new non-engineering exports must set an explicit collection. Replaying the same manifest leaves subsequent local drafts intact. Git provenance links identify immutable source revisions. Unsupported ACLs or record types need explicit preservation before any real migration.
+Import an owner-reviewed manifest and objects with `python -m internal_documents DATABASE MANIFEST --sha256 EXPECTED_HASH`. Supply original IDs, document `collection`, product and discipline, original author, bookmark, revisions, approvals, original attachment IDs and digests and reviewed user ACLs. Store attachment bytes alongside the manifest as `objects/<sha256>`. The importer operates transactionally, checks independent counts and file hashes, and rejects conflicting existing records. Keep the manifest and `objects/` directory inside the private `DOCS_DATA` volume and outside the public source repository; the CLI rejects manifests outside that volume and secures its directory and SQLite file. The root `.gitignore` and `.dockerignore` exclude common import-data paths. Legacy schema-1 engineering exports without a collection must include the explicit top-level `legacy_engineering: true` attestation and may contain only engineering records. Every new import must set an explicit `collection` on every document; HR and other non-engineering records cannot use the legacy fallback. Replaying the same manifest leaves subsequent local drafts intact. Git provenance links identify immutable source revisions. Unsupported ACLs or record types need explicit preservation before any real migration.
 
 Access tokens expire as issued. Cache recognized issuer signing keys for up to 24 hours since a successful fetch, with normal refresh every five minutes. An API restart can use those keys. A missing key or expired access token denies access. On expiry a new authorization flow restores the original bookmark. An editor with unsaved form content can sign in in a second tab and submit again. Removing an object ACL affects the next request. Identity changes affect future issuance and any existing self-contained access at its bounded expiry.
 

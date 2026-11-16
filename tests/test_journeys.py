@@ -1,9 +1,11 @@
 import base64
 import hashlib
 import json
+import sqlite3
 import tempfile
 import time
 import unittest
+from unittest.mock import patch
 from pathlib import Path
 from urllib.parse import parse_qs, urlsplit
 
@@ -14,6 +16,7 @@ from fastapi.testclient import TestClient
 
 from internal_documents import catalog
 from internal_documents.app import create
+from internal_documents.__main__ import run as import_cli
 from internal_documents.oidc import PRODUCT, PRODUCTS, UID, Keys
 
 ISS = "https://identity.example.test/"
@@ -66,6 +69,9 @@ class Journeys(unittest.TestCase):
         }
         self.batch = {
             "schema": 1,
+            # This fixture represents a legacy engineering-only export. New
+            # imports must classify every document explicitly.
+            "legacy_engineering": True,
             "expected_counts": {
                 "documents": 1,
                 "revisions": 1,
@@ -91,8 +97,11 @@ class Journeys(unittest.TestCase):
         self.upload()
 
     def upload(self):
+        return self.upload_batch(self.batch)
+
+    def upload_batch(self, batch):
         manifest = self.root / "manifest.json"
-        manifest.write_text(json.dumps(self.batch))
+        manifest.write_text(json.dumps(batch))
         return catalog.import_snapshot(
             self.database, manifest, hashlib.sha256(manifest.read_bytes()).hexdigest()
         )
@@ -160,6 +169,29 @@ class Journeys(unittest.TestCase):
         self.assertEqual(self.auth["code_challenge_method"], ["S256"])
         return "/callback?code=fixture-code&state=" + self.auth["state"][0]
 
+    def test_file_mounted_client_secret_is_used_at_token_exchange(self):
+        secret_file = self.root / "client-secret"
+        secret_file.write_text("mounted-test-credential\n")
+        config = dict(self.cfg, DOCS_CLIENT_SECRET_FILE=str(secret_file))
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            create(config)
+        del config["DOCS_CLIENT_SECRET"]
+        with TestClient(
+            create(config, keys=self.keys), base_url=WEB, follow_redirects=False
+        ) as client:
+            start = client.get("/sign-in", params={"next": "/"})
+            state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+            with patch(
+                "internal_documents.app.httpx.post", side_effect=httpx.ConnectError("fixture")
+            ) as post:
+                client.get("/callback", params={"code": "fixture", "state": state})
+            self.assertEqual(
+                post.call_args.kwargs["data"]["client_secret"], "mounted-test-credential"
+            )
+        secret_file.write_text("\n")
+        with self.assertRaisesRegex(ValueError, "confidential web client"):
+            create(config)
+
     def test_production_cannot_bootstrap_missing_or_empty_document_store(self):
         # A missing volume after a restart is an outage, not a new empty
         # organization. Startup must refuse to create a replacement catalog.
@@ -194,6 +226,108 @@ class Journeys(unittest.TestCase):
         production = TestClient(app, base_url="https://docs.internal.onesa.eu")
         self.addCleanup(production.close)
         self.assertEqual(production.get("/readyz").status_code, 200)
+
+    def test_application_refuses_symlinked_private_database(self):
+        # The import CLI already rejected a symlinked DB, but the web entry
+        # point followed it and could initialize/modify a database outside
+        # DOCS_DATA. Keep the external target completely untouched.
+        external = self.root / "external.sqlite"
+        with catalog.connection(external) as db:
+            db.execute("CREATE TABLE sentinel(value TEXT)")
+        directory = self.root / "symlinked-private-volume"
+        directory.mkdir()
+        (directory / "documents.sqlite").symlink_to(external)
+        with self.assertRaisesRegex(RuntimeError, "must not be a symlink"):
+            create(dict(self.cfg, DOCS_DATA=str(directory)))
+        with catalog.connection(external) as db:
+            tables = {row[0] for row in db.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+        self.assertEqual(tables, {"sentinel"})
+
+    def test_readiness_fails_fast_when_private_database_write_lock_is_busy(self):
+        # The container healthcheck has a 3-second deadline. Readiness must
+        # not inherit the normal 15-second request lock timeout or a routine
+        # writer can make the container appear dead while health probes hang.
+        lock = sqlite3.connect(self.database, timeout=0.1)
+        try:
+            lock.execute("BEGIN IMMEDIATE")
+            started = time.monotonic()
+            response = self.client.get("/readyz")
+            elapsed = time.monotonic() - started
+            self.assertEqual(response.status_code, 503)
+            self.assertLess(elapsed, 2.5)
+        finally:
+            lock.rollback()
+            lock.close()
+
+    def test_readiness_rejects_private_database_symlink_replacement(self):
+        self.database.unlink()
+        external = self.root / "replacement.sqlite"
+        catalog.initialize(external)
+        self.database.symlink_to(external)
+        self.assertEqual(self.client.get("/readyz").status_code, 503)
+
+    def test_readiness_rejects_database_with_missing_required_columns(self):
+        # SELECT 1 FROM <table> succeeds even when production queries need
+        # columns that are absent. Readiness must validate the actual schema.
+        with catalog.connection(self.database) as db:
+            db.execute("DROP TABLE grants")
+            db.execute("CREATE TABLE grants(id TEXT)")
+        self.assertEqual(self.client.get("/readyz").status_code, 503)
+
+    def test_production_startup_rejects_tables_with_incomplete_columns(self):
+        # A restored database can contain every expected table name but an
+        # incompatible schema. Do not start and serve requests that will fail.
+        root = self.root / "malformed-production-volume"
+        root.mkdir()
+        database = root / "documents.sqlite"
+        with catalog.connection(database) as db:
+            for table in ("documents", "revisions", "grants", "objects", "attachments", "imports"):
+                db.execute(f"CREATE TABLE {table}(id TEXT)")
+        config = dict(
+            self.cfg,
+            DOCS_ENVIRONMENT="production",
+            DOCS_ORIGIN="https://docs.internal.onesa.eu",
+            DOCS_ISSUER="https://auth.onesa.eu",
+            DOCS_DATA=str(root),
+        )
+        with self.assertRaisesRegex(RuntimeError, "schema invalid"):
+            create(config)
+
+    def test_import_cli_secures_existing_private_volume_and_database(self):
+        directory = self.root / "cli-private-volume"
+        directory.mkdir()
+        directory.chmod(0o755)
+        database = directory / "documents.sqlite"
+        import_dir = directory / "import"
+        objects = import_dir / "objects"
+        objects.mkdir(parents=True)
+        digest_object = hashlib.sha256(self.attachment).hexdigest()
+        (objects / digest_object).write_bytes(self.attachment)
+        manifest = import_dir / "manifest.json"
+        manifest.write_text(json.dumps(self.batch))
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        with patch("sys.argv", [
+            "onesa-documents", str(database), str(manifest), "--sha256", digest
+        ]):
+            import_cli()
+        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(database.stat().st_mode & 0o777, 0o600)
+
+    def test_import_cli_rejects_manifest_outside_private_volume(self):
+        directory = self.root / "cli-private-volume-outside-manifest"
+        directory.mkdir()
+        manifest = self.root / "outside-manifest.json"
+        manifest.write_text(json.dumps(self.batch))
+        database = directory / "documents.sqlite"
+        digest = hashlib.sha256(manifest.read_bytes()).hexdigest()
+        with patch("sys.argv", [
+            "onesa-documents", str(database), str(manifest), "--sha256", digest
+        ]):
+            with self.assertRaisesRegex(RuntimeError, "inside DOCS_DATA"):
+                import_cli()
+        self.assertFalse(database.exists())
 
     def test_readiness_fails_closed_when_private_database_volume_disappears(self):
         self.assertEqual(self.client.get("/healthz").status_code, 200)
@@ -448,6 +582,20 @@ class Journeys(unittest.TestCase):
             self.start().get("/api/documents", headers=headers).status_code, 503
         )
 
+    def test_malformed_oidc_token_exchange_response_is_a_controlled_outage(self):
+        # A 200 response containing a JSON array/string/null is not a token
+        # response. It previously raised TypeError in callback and returned
+        # an unhandled 500 instead of the normal retryable 503.
+        for malformed in (None, [], "not-a-token-object"):
+            with self.subTest(response=malformed):
+                self.exchange = lambda code, verifier, value=malformed: value
+                client = self.start()
+                self.client = client
+                callback = self.initiate(BOOKMARK)
+                response = client.get(callback)
+                self.assertEqual(response.status_code, 503)
+                self.assertIn("Retry sign-in for this document", response.text)
+
     def test_corrupt_jwks_cache_and_invalid_provider_reply_fail_closed(self):
         # Corrupt but valid JSON on disk must never yield a 500 error or
         # authorize a token, even when the identity provider is unavailable.
@@ -636,6 +784,17 @@ class Journeys(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "separate nonproduction hostname"):
                     create(dict(self.cfg, DOCS_ORIGIN=equivalent))
 
+    def test_existing_private_volume_permissions_are_tightened(self):
+        # mkdir(mode=0700) does not change an existing mount's permissions.
+        # The data directory contains sessions, ACLs, drafts and signing keys.
+        directory = self.root / "loose-private-volume"
+        directory.mkdir()
+        directory.chmod(0o755)
+        create(dict(self.cfg, DOCS_DATA=str(directory)))
+        database = directory / "documents.sqlite"
+        self.assertEqual(directory.stat().st_mode & 0o777, 0o700)
+        self.assertEqual(database.stat().st_mode & 0o777, 0o600)
+
     def test_permanent_public_and_internal_origins(self):
         for public in (
             "https://docs.onesa.eu",
@@ -655,6 +814,30 @@ class Journeys(unittest.TestCase):
             )
         )
 
+    def test_import_rejects_missing_collection_without_legacy_attestation(self):
+        from copy import deepcopy
+
+        batch = deepcopy(self.batch)
+        batch.pop("legacy_engineering")
+        batch["documents"][0]["id"] = "unclassified-document"
+        batch["documents"][0]["bookmark"] = "/docs/unclassified/document"
+        with self.assertRaisesRegex(ValueError, "explicit collection"):
+            self.upload_batch(batch)
+        with catalog.connection(self.database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM documents").fetchone()[0], 1)
+
+    def test_legacy_engineering_attestation_cannot_classify_hr_as_engineering(self):
+        from copy import deepcopy
+
+        batch = deepcopy(self.batch)
+        batch["documents"][0]["id"] = "misclassified-hr"
+        batch["documents"][0]["bookmark"] = "/docs/hr/unsafe-default"
+        batch["documents"][0]["collection"] = "hr"
+        with self.assertRaisesRegex(ValueError, "cannot contain other collections"):
+            self.upload_batch(batch)
+        with catalog.connection(self.database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM documents").fetchone()[0], 1)
+
     def test_legacy_engineering_grant_never_reads_hr_even_with_document_acl(self):
         from copy import deepcopy
 
@@ -667,6 +850,7 @@ class Journeys(unittest.TestCase):
         )
         hr["revisions"][0]["attachments"][0]["id"] = "hr-attachment"
         self.batch["documents"] = [hr]
+        self.batch.pop("legacy_engineering")
         self.upload()
         legacy = self.bearer(EDITOR, products=["engineering-documents"])
         self.assertEqual(
@@ -698,9 +882,35 @@ class Journeys(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "hostname is retired"):
             create(dict(self.cfg, DOCS_ORIGIN="https://docs.engineering.onesa.eu"))
 
+    def test_bearer_authentication_scheme_is_case_insensitive(self):
+        # HTTP authentication scheme names are case-insensitive. Mobile and
+        # third-party HTTP clients may legitimately send lowercase "bearer".
+        token = self.token(MEMBER)
+        for scheme in ("Bearer", "bearer", "BEARER"):
+            with self.subTest(scheme=scheme):
+                response = self.client.get(
+                    "/api/documents", headers={"Authorization": f"{scheme} {token}"}
+                )
+                self.assertEqual(response.status_code, 200)
+
+    def test_form_content_type_is_case_insensitive_and_rejects_malformed_fields(self):
+        headers = {
+            **self.bearer(EDITOR),
+            "Origin": WEB,
+            "Content-Type": "Application/X-WWW-Form-Urlencoded ; charset=UTF-8",
+        }
+        valid = b"base_revision=02&title=Drawing&body=accepted"
+        response = self.client.post("/edit/old-42", content=valid, headers=headers)
+        self.assertEqual(response.status_code, 200)
+        malformed = self.client.post(
+            "/edit/old-42", content=valid + b"&unexpected", headers=headers
+        )
+        self.assertEqual(malformed.status_code, 422)
+
     def test_unsafe_return_and_unsigned_input(self):
         for val in [
             "https://other.test/a",
+            "https://[",
             "//other.test/a",
             "/docs/%2f%2fexternal",
             "/docs/a\\b",

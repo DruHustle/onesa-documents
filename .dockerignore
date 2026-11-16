@@ -5,3 +5,6 @@ __pycache__
 *.sqlite*
 tests
 inventory
+objects
+manifest*.json
+backups

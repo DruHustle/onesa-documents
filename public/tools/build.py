@@ -77,10 +77,14 @@ def build(output):
                 "pdf",
             ):
                 raise ValueError("Invalid public publication")
-            source = ROOT / "source" / (slug + "." + kind)
+            source_root = ROOT / "source"
+            if source_root.is_symlink() or not source_root.is_dir():
+                raise ValueError("Public source root must be a local directory")
+            source = source_root / (slug + "." + kind)
             if (
                 source.is_symlink()
-                or source.resolve().parent != (ROOT / "source").resolve()
+                or not source.is_file()
+                or source.resolve().parent != source_root.resolve()
             ):
                 raise ValueError("Public sources must be local regular files")
             content = source.read_bytes()
