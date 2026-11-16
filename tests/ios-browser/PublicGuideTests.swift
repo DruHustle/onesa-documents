@@ -34,7 +34,7 @@ final class PublicGuideTests: XCTestCase {
         }
         // Safari can expose both navbar copies of the input. Once the viewport
         // moves for the keyboard, an index-based field can resolve to the other
-        // copy. Send key taps to the keyboard, then check the visible field.
+        // copy. Give the tapped field focus and check it received the input.
         initialField.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         let keyboard = safari.keyboards.firstMatch
         if !keyboard.waitForExistence(timeout: 8) {
@@ -42,13 +42,10 @@ final class PublicGuideTests: XCTestCase {
             field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
         XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "Tapping search did not open the iPhone keyboard")
-        for letter in "quickstart" {
-            let key = keyboard.keys.matching(NSPredicate(
-                format: "label ==[c] %@ OR identifier ==[c] %@", String(letter), String(letter)
-            )).firstMatch
-            XCTAssertTrue(key.waitForExistence(timeout: 5), "The iPhone keyboard did not offer the expected key")
-            key.tap()
-        }
+        // Safari's remote keyboard can expose a zero-size AX key even when
+        // the web field owns keyboard focus. Let XCTest type on the current
+        // first responder without resolving individual keys or a stale field.
+        safari.typeText("quickstart")
         let typed = fields.matching(NSPredicate(format: "value ==[c] %@", "quickstart")).firstMatch
         XCTAssertTrue(typed.waitForExistence(timeout: 10) && typed.isHittable,
                       "The visible documentation search did not receive the keyboard input")
