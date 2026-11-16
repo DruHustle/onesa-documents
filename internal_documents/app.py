@@ -89,7 +89,13 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         )
     audience = cfg["DOCS_AUDIENCE"]
     client = cfg["DOCS_CLIENT_ID"]
-    secret = cfg["DOCS_CLIENT_SECRET"]
+    secret_path = cfg.get("DOCS_CLIENT_SECRET_FILE")
+    if secret_path is not None:
+        if "DOCS_CLIENT_SECRET" in cfg:
+            raise ValueError("Configure exactly one Docs client secret source")
+        secret = Path(secret_path).read_text(encoding="utf-8").rstrip("\r\n")
+    else:
+        secret = cfg["DOCS_CLIENT_SECRET"]
     if not all([audience, client, secret]) or audience == client:
         raise ValueError(
             "Configure a distinct Docs API audience and confidential web client"
