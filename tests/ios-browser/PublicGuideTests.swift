@@ -21,17 +21,34 @@ final class PublicGuideTests: XCTestCase {
                 $0.isHittable && ($0.elementType == .searchField || $0.elementType == .textField)
             }
         }
-        let deadline = Date().addingTimeInterval(30)
-        while visibleField() == nil && Date() < deadline {
-            RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+        func waitForSearch() -> XCUIElement? {
+            let deadline = Date().addingTimeInterval(30)
+            repeat {
+                if let field = visibleField() { return field }
+                RunLoop.current.run(until: Date().addingTimeInterval(0.25))
+            } while Date() < deadline
+            return nil
         }
-        guard let initialField = visibleField() else {
-            let snapshot = web.descendants(matching: .any).allElementsBoundByIndex.prefix(80)
-                .map { "\($0.elementType):\($0.label):\($0.placeholderValue ?? "")" }
-                .joined(separator: " | ")
-            XCTFail("The public page did not expose a visible native search field. AX: \(snapshot)")
-            return
+        var target = waitForSearch()
+        if target == nil {
+            let error = web.staticTexts.matching(NSPredicate(
+                format: "label BEGINSWITH[c] %@ AND label CONTAINS[c] %@ AND label ENDSWITH[c] %@",
+                "Safari couldn", "the server stopped", "responding."
+            )).firstMatch
+            let address = safari.textFields["TabBarItemTitle"]
+            let reload = safari.buttons["ReloadButton"]
+            // Retry this read once only when Safari identifies a transport error
+            // at the public origin and no guide or typed query has been visited.
+            if error.exists && address.exists && reload.exists && reload.isHittable {
+                let value = (address.value as? String)?.trimmingCharacters(
+                    in: CharacterSet(charactersIn: "\u{200E}\u{200F} ").union(.whitespacesAndNewlines))
+                if value == "docs.onesa.eu" || value == "https://docs.onesa.eu/" {
+                    reload.tap()
+                    target = waitForSearch()
+                }
+            }
         }
+        let initialField = try XCTUnwrap(target, "The public homepage did not expose its search input")
         // Safari can expose both navbar copies of the input. Once the viewport
         // moves for the keyboard, an index-based field can resolve to the other
         // copy. Give the tapped field focus and check it received the input.
@@ -42,11 +59,62 @@ final class PublicGuideTests: XCTestCase {
             field.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
         }
         XCTAssertTrue(keyboard.waitForExistence(timeout: 10), "Tapping search did not open the iPhone keyboard")
-        // Safari's remote keyboard can expose a zero-size AX key even when
-        // the web field owns keyboard focus. Let XCTest type on the current
-        // first responder without resolving individual keys or a stale field.
-        safari.typeText("quickstart")
-        let typed = fields.matching(NSPredicate(format: "value ==[c] %@", "quickstart")).firstMatch
+        // On a fresh simulator, the QuickPath introduction can cover the
+        // keyboard without presenting an XCTest alert.
+        let springboard = XCUIApplication(bundleIdentifier: "com.apple.springboard")
+        for owner in [safari, springboard] {
+            let tutorial = owner.descendants(matching: .any)["UIContinuousPathIntroductionView"].firstMatch
+            if !tutorial.exists { continue }
+            let explanation = owner.staticTexts["Speed up your typing by sliding your finger across the letters to compose a word."]
+            guard explanation.exists else { continue }
+            let action = owner.buttons.matching(NSPredicate(format: "label == %@", "Continue"))
+                .allElementsBoundByIndex.first { $0.isHittable && tutorial.frame.intersects($0.frame)
+                    && $0.frame.minY >= explanation.frame.maxY }
+            try XCTUnwrap(action, "The keyboard tutorial did not expose its Continue button").tap()
+            XCTAssertTrue(tutorial.waitForNonExistence(timeout: 10))
+            break
+        }
+
+        // WebKit may expose zero-size keys or accept bulk XCTest typing without
+        // changing the field. Synchronize native input against the visible value.
+        let query = "quickstart"
+        let typed = fields.matching(NSPredicate(format: "value ==[c] %@", query)).firstMatch
+        safari.typeText(query)
+        var prefix = query
+        if !typed.waitForExistence(timeout: 5) {
+            let input = try XCTUnwrap(visibleField(), "The focused documentation search disappeared")
+            let value = (input.value as? String) ?? ""
+            prefix = value == input.placeholderValue ? "" : value.lowercased()
+            XCTAssertTrue(query.hasPrefix(prefix), "The search field received unexpected text")
+        }
+        for letter in query.dropFirst(prefix.count) {
+            let key = String(letter)
+            let next = prefix + key
+            let received = fields.matching(NSPredicate(format: "value ==[c] %@", next)).firstMatch
+            web.typeText(key)
+            if !received.waitForExistence(timeout: 4) {
+                let input = try XCTUnwrap(visibleField())
+                let value = (input.value as? String) ?? ""
+                let unchanged = value.lowercased() == prefix || (prefix.isEmpty && value == input.placeholderValue)
+                XCTAssertTrue(unchanged, "The search field received unexpected native input")
+                let keys = keyboard.keys.matching(NSPredicate(
+                    format: "label ==[c] %@ OR identifier ==[c] %@", key, key
+                )).allElementsBoundByIndex
+                if let visibleKey = keys.first(where: { !$0.frame.isEmpty && keyboard.frame.contains($0.frame) && $0.isHittable }) {
+                    let frame = visibleKey.frame
+                    let origin = safari.frame.origin
+                    let offset = CGVector(dx: frame.midX - origin.x, dy: frame.midY - origin.y)
+                    safari.coordinate(withNormalizedOffset: .zero).withOffset(offset).tap()
+                } else {
+                    // Restore focus to this search field before repeating only
+                    // the unobserved character through the native keyboard.
+                    input.coordinate(withNormalizedOffset: CGVector(dx: 0.5, dy: 0.5)).tap()
+                    web.typeText(key)
+                }
+                XCTAssertTrue(received.waitForExistence(timeout: 5), "The native keyboard did not update the search field")
+            }
+            prefix = next
+        }
         XCTAssertTrue(typed.waitForExistence(timeout: 10) && typed.isHittable,
                       "The visible documentation search did not receive the keyboard input")
         // iOS 26 Safari may classify web links as Other rather than Link in
