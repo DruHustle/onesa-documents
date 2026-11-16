@@ -169,6 +169,29 @@ class Journeys(unittest.TestCase):
         self.assertEqual(self.auth["code_challenge_method"], ["S256"])
         return "/callback?code=fixture-code&state=" + self.auth["state"][0]
 
+    def test_file_mounted_client_secret_is_used_at_token_exchange(self):
+        secret_file = self.root / "client-secret"
+        secret_file.write_text("mounted-test-credential\n")
+        config = dict(self.cfg, DOCS_CLIENT_SECRET_FILE=str(secret_file))
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            create(config)
+        del config["DOCS_CLIENT_SECRET"]
+        with TestClient(
+            create(config, keys=self.keys), base_url=WEB, follow_redirects=False
+        ) as client:
+            start = client.get("/sign-in", params={"next": "/"})
+            state = parse_qs(urlsplit(start.headers["location"]).query)["state"][0]
+            with patch(
+                "internal_documents.app.httpx.post", side_effect=httpx.ConnectError("fixture")
+            ) as post:
+                client.get("/callback", params={"code": "fixture", "state": state})
+            self.assertEqual(
+                post.call_args.kwargs["data"]["client_secret"], "mounted-test-credential"
+            )
+        secret_file.write_text("\n")
+        with self.assertRaisesRegex(ValueError, "confidential web client"):
+            create(config)
+
     def test_production_cannot_bootstrap_missing_or_empty_document_store(self):
         # A missing volume after a restart is an outage, not a new empty
         # organization. Startup must refuse to create a replacement catalog.

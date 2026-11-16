@@ -1,0 +1,33 @@
+name: onesa-internal-documents-production
+
+services:
+  documents:
+    image: "${DOCS_IMAGE:?Set the image tag for the exact source revision built on this host}"
+    pull_policy: never
+    restart: unless-stopped
+    init: true
+    read_only: true
+    cap_drop: [ALL]
+    security_opt: [no-new-privileges:true]
+    environment:
+      DOCS_ENVIRONMENT: production
+      DOCS_ORIGIN: https://docs.internal.onesa.eu
+      DOCS_ISSUER: https://auth.onesa.eu/
+      DOCS_AUDIENCE: https://api.docs.onesa.eu
+      DOCS_CLIENT_ID: "${DOCS_CLIENT_ID:?Set the production Documents client ID}"
+      DOCS_CLIENT_SECRET_FILE: /run/secrets/docs_client_secret
+      DOCS_DATA: /srv/docs
+    secrets:
+      - docs_client_secret
+    ports:
+      - "127.0.0.1:${DOCS_HOST_PORT:?Set the loopback port reserved for Documents}:8000"
+    volumes:
+      - type: bind
+        source: "${DOCS_VOLUME:?Set the absolute path of the existing private volume}"
+        target: /srv/docs
+        bind:
+          create_host_path: false
+
+secrets:
+  docs_client_secret:
+    file: "${DOCS_CLIENT_SECRET_PATH:?Set the absolute path of the mounted client secret}"

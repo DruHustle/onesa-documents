@@ -21,12 +21,42 @@ Install `python -m pip install -r requirements.txt` with Python 3.12 and run `py
 | --- | --- |
 | DOCS_ISSUER | Exact HTTPS Auth0 custom domain. Production issuer is `https://auth.onesa.eu/`. |
 | DOCS_AUDIENCE | Dedicated resource identifier `https://api.docs.onesa.eu`. This identifier does not act as a content origin. |
-| DOCS_CLIENT_ID, DOCS_CLIENT_SECRET | Confidential web client registered only for the internal product and its exact environment-specific callback. |
+| DOCS_CLIENT_ID, DOCS_CLIENT_SECRET | Confidential web client registered for the internal product and its exact environment-specific callback. Set the secret directly or supply its file path in `DOCS_CLIENT_SECRET_FILE`. |
 | DOCS_ORIGIN | Production is `https://docs.internal.onesa.eu`. Use a protected separate hostname for staging. |
 | DOCS_ENVIRONMENT | The Docker image defaults to `production` and enforces the two canonical production origins. Explicitly override to `staging` only on isolated nonproduction deployments with their own OIDC client, hostname, and private data. |
 | DOCS_DATA | Private writable directory for document data and the issuer-specific public signing-key cache. The service enforces directory mode `0700` and SQLite database mode `0600`; startup fails if those restrictions cannot be applied. |
 
 The sign-in flow uses Authorization Code with S256 PKCE, nonce and one-use browser-bound state. Signed access tokens must match the configured issuer and resource. The Onesa UUID and scoped products/roles are namespaced claims. The canonical grant is `internal-documents`. Previously approved `engineering-documents` identities remain eligible **only for the engineering collection** and still require per-document ACLs. Search, metadata, preview, drafts and attachment downloads apply the same restriction. HR access requires an explicit ACL plus canonical Internal Documents access. Portal and Identity administrators inherit no document grants.
+
+## Deploy Internal Documents on the Oracle host
+
+Use the existing host's Docker Engine, Compose v2 and host-network Cloudflare Tunnel. Set these deployment values on the Oracle host:
+
+| Variable | Value |
+| --- | --- |
+| `DOCS_HOST_PORT` | Port reserved for Documents on host loopback. Check existing listeners and container port mappings before assigning it. |
+| `DOCS_VOLUME` | Absolute path on the encrypted private volume containing the restored catalog or reviewed import described below. The directory and database must be writable by container UID 10001. Compose requires an existing directory. |
+| `DOCS_CLIENT_ID` | Production Onesa Auth0 confidential Docs client ID, registered with callback `https://docs.internal.onesa.eu/callback` and the Docs API audience. |
+| `DOCS_CLIENT_SECRET_PATH` | Absolute path to that client's secret file, outside the checkout. Standalone Compose bind-mounts file-backed secrets. Restrict the file to UID 10001 with mode 0400, or use the equivalent host-mapped UID with a remapped Docker engine. |
+
+From the checked-out release revision, build the image on the Oracle host. The Dockerfile, dependencies and application source come from the same commit.
+
+```sh
+set -eu
+revision=$(git rev-parse HEAD)
+export DOCS_IMAGE="onesa-internal-documents:${revision}"
+git archive "$revision" Dockerfile requirements.txt internal_documents |
+  docker build --label "org.opencontainers.image.revision=$revision" -t "$DOCS_IMAGE" -
+```
+
+For a first import, run the private migration procedure below on the Oracle volume. Once the volume contains the catalog, start the service in the same shell. The image uses the database readiness probe on port 8000.
+
+```sh
+docker compose -f deploy/compose.oracle.yaml up -d --wait
+curl -fsS "http://127.0.0.1:$DOCS_HOST_PORT/readyz"
+```
+
+Point the existing production tunnel's published application `docs.internal.onesa.eu` to `http://127.0.0.1:<DOCS_HOST_PORT>`. Confirm the Cloudflare edge certificate covers `docs.internal.onesa.eu`. Keep callbacks out of access logs and apply the application's `private, no-store` cache policy. Verify anonymous `/api/documents` returns 401, a protected bookmark redirects through Onesa sign-in, and a controlled reader sees only its authorized documents after returning. Retain the previous image and private backup for rollback.
 
 ## Inventory, import and recovery
 
