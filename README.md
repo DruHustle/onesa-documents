@@ -56,7 +56,15 @@ docker compose -f deploy/compose.oracle.yaml up -d --wait
 curl -fsS "http://127.0.0.1:$DOCS_HOST_PORT/readyz"
 ```
 
-Point the existing production tunnel's published application `docs.internal.onesa.eu` to `http://127.0.0.1:<DOCS_HOST_PORT>`. Confirm the Cloudflare edge certificate covers `docs.internal.onesa.eu`. Keep callbacks out of access logs and apply the application's `private, no-store` cache policy. Verify anonymous `/api/documents` returns 401, a protected bookmark redirects through Onesa sign-in, and a controlled reader sees only its authorized documents after returning. Retain the previous image and private backup for rollback.
+### Cloudflare edge for the internal hostname
+
+Deploy `deploy/cloudflare/internal-documents.mjs` as a module Worker in the Onesa account. Under **Settings → Domains & Routes**, attach the exact Custom Domain `docs.internal.onesa.eu`. Cloudflare creates the DNS record and certificate for this nested hostname. Disable the `workers.dev` and preview URLs. Keep request URLs and callback query strings out of Worker logs and traces.
+
+Until the Oracle service is ready, leave `DOCUMENTS_SERVICE` unbound. The Worker returns 503 on the canonical hostname without reading document data. This allows verification of DNS and the edge certificate before cutover.
+
+After confirming the private host's readiness, register a single HTTP VPC Service against the existing host-network Oracle production tunnel. Select its loopback IPv4 address `127.0.0.1` and the reserved HTTP port `DOCS_HOST_PORT` from the running Compose service. Under the Worker's **Bindings**, bind that VPC Service with the exact name `DOCUMENTS_SERVICE`. This hostname's DNS belongs to the Worker Custom Domain. The VPC binding reaches Oracle without a separate public tunnel hostname. See [Cloudflare Custom Domains](https://developers.cloudflare.com/workers/configuration/routing/custom-domains/) and [VPC Services](https://developers.cloudflare.com/workers-vpc/get-started/).
+
+Verify anonymous `/api/documents` returns 401, a protected bookmark redirects through Onesa sign-in, and a controlled reader sees only authorized documents after returning. Recheck downloaded bytes and retained bookmark paths against the private source. Removing the binding returns the edge to the 503 maintenance response while preserving the domain, certificate and stored documents. Retain the previous image and private backup for rollback.
 
 ## Inventory, import and recovery
 
