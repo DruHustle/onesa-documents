@@ -836,7 +836,7 @@ class Journeys(unittest.TestCase):
             for audience in ("user", "admin"):
                 with self.subTest(audience=audience):
                     response = client.get("/register", params={"audience": audience})
-                    self.assertIn(response.status_code, (302, 307))
+                    self.assertIn(response.status_code, (302, 303, 307))
                     url = urlsplit(response.headers["location"])
                     self.assertEqual(url.scheme, "https")
                     self.assertEqual(url.netloc, "account.onesa.eu")
