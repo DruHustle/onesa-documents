@@ -42,6 +42,7 @@ REQUIRED_COLUMNS = {
     "imports": {"digest"},
     "challenges": {"state", "binding", "verifier", "nonce", "destination", "expires"},
     "sessions": {"id", "access_token", "expires"},
+    "registration_returns": {"binding", "destination", "expires"},
 }
 
 
