@@ -21,6 +21,7 @@ from .oidc import PRODUCT, PRODUCTS, Keys, KeysUnavailable, account, https_origi
 
 SESSION = "__Host-docs-session"
 STATE = "__Host-docs-challenge"
+REGISTRATION = "__Host-docs-registration"
 
 
 def hash_value(value):
@@ -68,6 +69,9 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     cfg = os.environ if settings is None else settings
     issuer = https_origin(cfg["DOCS_ISSUER"]) + "/"
     origin = https_origin(cfg["DOCS_ORIGIN"])
+    account_origin = https_origin(cfg.get("DOCS_ACCOUNT_ORIGIN", issuer))
+    if account_origin == origin:
+        raise ValueError("Internal Documents and the Identity account service require distinct origins")
     if urlsplit(origin).hostname.rstrip(".").lower() == "docs.onesa.eu":
         raise ValueError("docs.onesa.eu is reserved for public documents")
     if urlsplit(origin).hostname.rstrip(".").lower() == "docs.engineering.onesa.eu":
@@ -148,6 +152,8 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         db.executescript("""CREATE TABLE IF NOT EXISTS challenges(
             state TEXT PRIMARY KEY,binding TEXT NOT NULL,verifier TEXT NOT NULL, nonce TEXT NOT NULL,
             destination TEXT NOT NULL,expires INTEGER NOT NULL);
+            CREATE TABLE IF NOT EXISTS registration_returns(
+                binding TEXT PRIMARY KEY,destination TEXT NOT NULL,expires INTEGER NOT NULL);
             CREATE TABLE IF NOT EXISTS sessions(id TEXT PRIMARY KEY,access_token TEXT NOT NULL,expires INTEGER NOT NULL);""")
         try:
             catalog.verify_schema(db)
@@ -242,6 +248,33 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             raise HTTPException(503, "Document store unavailable")
         return {"service": "internal-documents", "ready": True}
 
+    @app.get("/register")
+    def register(audience: str = "user", next: str = "/"):
+        if audience not in ("user", "admin"):
+            raise HTTPException(400, "Choose user or administrator registration")
+        target = safe_destination(next)
+        binding = secrets.token_urlsafe(32)
+        with catalog.connection(database) as db:
+            db.execute("DELETE FROM registration_returns WHERE expires<=?", (clock(),))
+            db.execute("INSERT INTO registration_returns VALUES(?,?,?)",
+                       (hash_value(binding), target, clock() + 3600))
+        response = RedirectResponse(account_origin + "/register?" + urlencode({
+            "audience": audience, "product": "internal-documents", "platform": "web",
+        }), 303)
+        response.set_cookie(REGISTRATION, binding, secure=True, httponly=True, samesite="lax", max_age=3600)
+        return response
+
+    @app.get("/registration/return")
+    def registration_return(request: Request):
+        with catalog.connection(database) as db:
+            row = db.execute(
+                "DELETE FROM registration_returns WHERE binding=? AND expires>? RETURNING destination",
+                (hash_value(request.cookies.get(REGISTRATION, "")), clock()),
+            ).fetchone()
+        response = RedirectResponse("/sign-in?" + urlencode({"next": row["destination"] if row else "/"}), 303)
+        response.delete_cookie(REGISTRATION, secure=True, httponly=True, samesite="lax")
+        return response
+
     @app.get("/sign-in")
     def sign_in(next: str = "/"):
         target = safe_destination(next)
@@ -320,6 +353,10 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             '<p>Sign-in could not finish.</p><a href="/sign-in?'
             + html.escape(urlencode({"next": tx["destination"]}))
             + '">Retry sign-in for this document</a>'
+            + '<p><a href="/register?' + html.escape(urlencode({"next": tx["destination"]}))
+            + '">Create an Onesa account</a></p><p><a href="/register?'
+            + html.escape(urlencode({"audience": "admin", "next": tx["destination"]}))
+            + '">Request administrator access</a></p>'
         )
         try:
             if not code:

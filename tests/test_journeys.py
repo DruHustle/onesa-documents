@@ -169,6 +169,26 @@ class Journeys(unittest.TestCase):
         self.assertEqual(self.auth["code_challenge_method"], ["S256"])
         return "/callback?code=fixture-code&state=" + self.auth["state"][0]
 
+    def test_registration_returns_user_or_admin_to_original_private_bookmark(self):
+        bookmark = "/docs/engineering/qualification"
+        for audience in ("user", "admin"):
+            start = self.client.get("/register", params={"audience": audience, "next": bookmark})
+            self.assertEqual(start.status_code, 303)
+            address = urlsplit(start.headers["location"])
+            self.assertEqual(address.path, "/register")
+            self.assertEqual(parse_qs(address.query), {
+                "product": ["internal-documents"], "platform": ["web"], "audience": [audience],
+            })
+            self.assertNotIn(bookmark, start.headers["location"])
+            resume = self.client.get("/registration/return")
+            self.assertEqual(parse_qs(urlsplit(resume.headers["location"]).query)["next"], [bookmark])
+            oidc = self.client.get(resume.headers["location"])
+            self.assertEqual(urlsplit(oidc.headers["location"]).path, "/authorize")
+            self.assertEqual(self.client.get("/api/documents").status_code, 401)
+            replay = self.client.get("/registration/return")
+            self.assertEqual(parse_qs(urlsplit(replay.headers["location"]).query)["next"], ["/"])
+        self.assertEqual(self.client.get("/register", params={"next": "https://other.example/"}).status_code, 400)
+
     def test_file_mounted_client_secret_is_used_at_token_exchange(self):
         secret_file = self.root / "client-secret"
         secret_file.write_text("mounted-test-credential\n")
