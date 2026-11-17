@@ -823,6 +823,26 @@ class Journeys(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "separate nonproduction hostname"):
                     create(dict(self.cfg, DOCS_ORIGIN=equivalent))
 
+    def test_production_signup_uses_account_host_not_auth0_issuer(self):
+        config = dict(
+            self.cfg,
+            DOCS_ORIGIN="https://docs.internal.onesa.eu",
+            DOCS_ISSUER="https://auth.onesa.eu",
+            DOCS_ENVIRONMENT="production",
+        )
+        with TestClient(create(config, keys=self.keys, exchange=self.exchange),
+                        base_url="https://docs.internal.onesa.eu",
+                        follow_redirects=False) as client:
+            for audience in ("user", "admin"):
+                with self.subTest(audience=audience):
+                    response = client.get("/register", params={"audience": audience})
+                    self.assertIn(response.status_code, (302, 303, 307))
+                    url = urlsplit(response.headers["location"])
+                    self.assertEqual(url.scheme, "https")
+                    self.assertEqual(url.netloc, "account.onesa.eu")
+                    self.assertEqual(url.path, "/register")
+                    self.assertEqual(parse_qs(url.query)["audience"], [audience])
+
     def test_existing_private_volume_permissions_are_tightened(self):
         # mkdir(mode=0700) does not change an existing mount's permissions.
         # The data directory contains sessions, ACLs, drafts and signing keys.

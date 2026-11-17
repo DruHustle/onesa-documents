@@ -69,7 +69,9 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     cfg = os.environ if settings is None else settings
     issuer = https_origin(cfg["DOCS_ISSUER"]) + "/"
     origin = https_origin(cfg["DOCS_ORIGIN"])
-    account_origin = https_origin(cfg.get("DOCS_ACCOUNT_ORIGIN", issuer))
+    # The production issuer is Auth0, not the Onesa registration UI.
+    default_account_origin = "https://account.onesa.eu" if issuer == "https://auth.onesa.eu/" else issuer
+    account_origin = https_origin(cfg.get("DOCS_ACCOUNT_ORIGIN", default_account_origin))
     if account_origin == origin:
         raise ValueError("Internal Documents and the Identity account service require distinct origins")
     if urlsplit(origin).hostname.rstrip(".").lower() == "docs.onesa.eu":
