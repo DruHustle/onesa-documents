@@ -103,6 +103,12 @@ def import_snapshot(path, manifest, digest):
     legacy_engineering = batch.get("legacy_engineering", False)
     if not isinstance(legacy_engineering, bool):
         raise ValueError("Invalid legacy engineering attestation")
+    # Check even on replay: earlier importers accepted additional ACL fields
+    # without storing their restrictions. An existing digest cannot certify them.
+    for doc in batch["documents"]:
+        for grant in doc["grants"]:
+            if not isinstance(grant, dict) or grant.keys() != {"user_id", "permission"}:
+                raise ValueError("Unsupported document grant fields; reconcile source permissions")
     totals = {"documents": 0, "revisions": 0, "attachments": 0, "grants": 0}
     with connection(path) as db:
         db.execute("BEGIN IMMEDIATE")

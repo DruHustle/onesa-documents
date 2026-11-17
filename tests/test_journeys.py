@@ -500,6 +500,25 @@ class Journeys(unittest.TestCase):
             self.assertEqual(db.execute("SELECT count(*) FROM documents").fetchone()[0], 1)
             self.assertEqual(db.execute("SELECT count(*) FROM imports").fetchone()[0], 1)
 
+    def test_import_rejects_unsupported_grant_fields_on_first_import_and_replay(self):
+        doc = self.batch["documents"][0]
+        doc["id"] = "restricted-grant"
+        doc["bookmark"] = "/docs/restricted-grant"
+        doc["revisions"][0]["attachments"][0]["id"] = "restricted-drawing"
+        doc["grants"][1]["expires_at"] = "2026-12-01T00:00:00Z"
+        with self.assertRaisesRegex(ValueError, "Unsupported document grant fields"):
+            self.upload()
+        with catalog.connection(self.database) as db:
+            self.assertEqual(db.execute("SELECT count(*) FROM documents").fetchone()[0], 1)
+            self.assertEqual(db.execute("SELECT count(*) FROM grants").fetchone()[0], 2)
+            self.assertEqual(db.execute("SELECT count(*) FROM imports").fetchone()[0], 1)
+
+            # A digest recorded by an older importer must also surface the mismatch.
+            digest = hashlib.sha256((self.root / "manifest.json").read_bytes()).hexdigest()
+            db.execute("INSERT INTO imports VALUES(?)", (digest,))
+        with self.assertRaisesRegex(ValueError, "Unsupported document grant fields"):
+            self.upload()
+
     def test_editor_draft_vs_reader(self):
         payload = {
             "base_revision": "02",
