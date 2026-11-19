@@ -57,10 +57,34 @@ def main():
     command("sudo", "safaridriver", "--enable")
     command("xcrun", "simctl", "launch", udid, "com.apple.mobilesafari")
     time.sleep(4)
-    driver = subprocess.Popen(["safaridriver", "--port", "4445"])
+    def launch_driver():
+        return subprocess.Popen(["safaridriver", "--port", "4445"])
+
+    driver = launch_driver()
     failures = []
     try:
-        until(lambda: webdriver("GET", "/status") is not None)
+        # Cold iOS simulators sometimes launch Safari's initial Start Page
+        # before their WebDriver HTTP listener becomes responsive. Require the
+        # actual WebDriver status, not merely a process or simulator boot.
+        def ready():
+            if driver.poll() is not None:
+                raise SystemExit("SafariDriver exited before its HTTP status was available")
+            return webdriver("GET", "/status", timeout=6) is not None
+
+        try:
+            until(ready, seconds=70)
+        except RuntimeError:
+            # No session, navigation, credentials or document action has run.
+            # Restart only the unresponsive browser driver and Safari process,
+            # never a page interaction or sign-in attempt.
+            print("SafariDriver readiness restart before navigation", flush=True)
+            driver.terminate()
+            driver.wait(timeout=10)
+            subprocess.run(["xcrun", "simctl", "terminate", udid, "com.apple.mobilesafari"], check=False)
+            command("xcrun", "simctl", "launch", udid, "com.apple.mobilesafari")
+            time.sleep(6)
+            driver = launch_driver()
+            until(ready, seconds=70)
         capabilities = {"capabilities": {"alwaysMatch": {
             "browserName": "Safari", "platformName": "iOS", "pageLoadStrategy": "eager",
             "safari:useSimulator": True, "safari:deviceUDID": udid,
