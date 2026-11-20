@@ -462,7 +462,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
 
     def may_edit(request):
         roles = request.state.docs_roles
-        return isinstance(roles, list) and any(r in ("editor", "admin") for r in roles)
+        return isinstance(roles, list) and any(r in ("editor", "admin", "administrator") for r in roles)
 
     def store_draft(request, key, payload):
         if (
