@@ -604,9 +604,19 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             + "</small></li>"
             for row in rows
         )
+        administrator_link = (
+            '<p><a href="'
+            + html.escape(account_origin + "/admin?product=internal-documents", quote=True)
+            + '">Manage Onesa administrators</a></p>'
+            if isinstance(request.state.docs_roles, list)
+            and any(role in ("admin", "administrator") for role in request.state.docs_roles)
+            else ""
+        )
         return page(
             "Internal Documents",
-            '<h1>Internal Documents</h1><form method="post" action="/logout"><button>Sign out</button></form>'
+            '<h1>Internal Documents</h1>'
+            + administrator_link
+            + '<form method="post" action="/logout"><button>Sign out</button></form>'
             '<form><label>Search documents <input name="q" value="'
             + html.escape(q, quote=True)
             + '"></label><button>Search</button></form>'
