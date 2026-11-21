@@ -20,7 +20,9 @@ def verify(root):
                 raise ValueError("Public bundle contains symlinks")
         for name in names:
             file = Path(parent) / name
-            if file.is_symlink() or not file.is_file():
+            if file.is_symlink():
+                raise ValueError("Public bundle contains symlinks")
+            if not file.is_file():
                 raise ValueError("Unsafe public bundle file")
             key = file.relative_to(root).as_posix()
             if key.startswith(".") or ".." in file.relative_to(root).parts:
