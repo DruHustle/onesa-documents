@@ -47,6 +47,23 @@ class PagesPublicPackageTests(unittest.TestCase):
         finally:
             pages.MAX_SIZE = original
 
+    def test_manual_shadow_release_never_uses_production_dns_or_unreviewed_head(self):
+        # This protects the source workflow; live Cloudflare behavior is
+        # independently qualified after a manually authorized deployment.
+        workflow = (ROOT / ".github/workflows/deploy-public-docs-shadow.yml").read_text()
+        self.assertIn("workflow_dispatch:", workflow)
+        self.assertIn("github.ref == 'refs/heads/main'", workflow)
+        self.assertIn('test "$GITHUB_SHA" = "$EXPECTED_SHA"', workflow)
+        self.assertIn("CLOUDFLARE_PAGES_DIRECT_UPLOAD_TOKEN", workflow)
+        self.assertIn("CLOUDFLARE_API_TOKEN", workflow)
+        self.assertIn("python public/tools/build.py", workflow)
+        self.assertIn("python public/tools/verify_pages.py", workflow)
+        self.assertIn("--project-name=onesa-public-docs-shadow --branch=review", workflow)
+        self.assertIn("review.onesa-public-docs-shadow.pages.dev", workflow)
+        self.assertIn('cmp "$RUNNER_TEMP/onesa-public-pages/$entry" "$RUNNER_TEMP/served-$entry"', workflow)
+        self.assertNotIn("--branch=main", workflow)
+        self.assertNotIn("--project-name=onesa-engineering-docs", workflow)
+
 
 if __name__ == "__main__":
     unittest.main()
