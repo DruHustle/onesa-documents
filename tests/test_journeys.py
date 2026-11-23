@@ -169,6 +169,20 @@ class Journeys(unittest.TestCase):
         self.assertEqual(self.auth["code_challenge_method"], ["S256"])
         return "/callback?code=fixture-code&state=" + self.auth["state"][0]
 
+    def test_signed_out_home_shows_only_the_internal_documents_overview(self):
+        with patch("internal_documents.app.catalog.connection", side_effect=AssertionError):
+            guest = self.client.get("/")
+        self.assertEqual(guest.status_code, 200)
+        self.assertEqual(guest.headers["cache-control"], "private, no-store")
+        self.assertNotIn("set-cookie", guest.headers)
+        self.assertIn("Onesa team members", guest.text)
+        self.assertIn('href="/sign-in"', guest.text)
+        self.assertIn('href="/register"', guest.text)
+        for private_value in (BOOKMARK, "Test pump drawing", "drawing.pdf", "Manage Onesa administrators"):
+            self.assertNotIn(private_value, guest.text)
+        self.assertEqual(self.client.get("/api/documents").status_code, 401)
+        self.assertEqual(self.client.get(BOOKMARK).status_code, 303)
+
     def test_registration_returns_user_or_admin_to_original_private_bookmark(self):
         bookmark = "/docs/engineering/qualification"
         for audience in ("user", "admin"):
