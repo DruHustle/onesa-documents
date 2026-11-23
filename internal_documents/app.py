@@ -274,12 +274,16 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
                 "DELETE FROM registration_returns WHERE binding=? AND expires>? RETURNING destination",
                 (hash_value(request.cookies.get(REGISTRATION, "")), clock()),
             ).fetchone()
-        response = RedirectResponse("/sign-in?" + urlencode({"next": row["destination"] if row else "/"}), 303)
+        parameters = {
+            "next": row["destination"] if row else "/",
+            "registration": "complete",
+        }
+        response = RedirectResponse("/sign-in?" + urlencode(parameters), 303)
         response.delete_cookie(REGISTRATION, secure=True, httponly=True, samesite="lax")
         return response
 
     @app.get("/sign-in")
-    def sign_in(next: str = "/"):
+    def sign_in(next: str = "/", registration: str = ""):
         target = safe_destination(next)
         state, binding, verifier, nonce = [secrets.token_urlsafe(36) for _ in range(4)]
         with catalog.connection(database) as db:
@@ -301,23 +305,20 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             .rstrip(b"=")
             .decode()
         )
-        url = (
-            issuer
-            + "authorize?"
-            + urlencode(
-                {
-                    "client_id": client,
-                    "response_type": "code",
-                    "redirect_uri": origin + "/callback",
-                    "scope": "openid",
-                    "audience": audience,
-                    "state": state,
-                    "nonce": nonce,
-                    "code_challenge": challenge,
-                    "code_challenge_method": "S256",
-                }
-            )
-        )
+        parameters = {
+            "client_id": client,
+            "response_type": "code",
+            "redirect_uri": origin + "/callback",
+            "scope": "openid",
+            "audience": audience,
+            "state": state,
+            "nonce": nonce,
+            "code_challenge": challenge,
+            "code_challenge_method": "S256",
+        }
+        if registration == "complete":
+            parameters["prompt"] = "none"
+        url = issuer + "authorize?" + urlencode(parameters)
         response = RedirectResponse(url, 303)
         response.set_cookie(
             STATE, binding, secure=True, httponly=True, samesite="lax", max_age=600
@@ -340,7 +341,10 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         return res.json()
 
     @app.get("/callback")
-    def callback(request: Request, state: str, code: str = ""):
+    def callback(
+        request: Request, state: str, code: str = "", error: str = "",
+        error_description: str = "",
+    ):
         with catalog.connection(database) as db:
             tx = db.execute(
                 "DELETE FROM challenges WHERE state=? AND binding=? AND expires>? RETURNING *",
@@ -353,7 +357,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         if not tx:
             raise HTTPException(400, "Return to the document to start sign-in again")
         retry = (
-            '<p>Sign-in could not finish.</p><a href="/sign-in?'
+            '<a href="/sign-in?'
             + html.escape(urlencode({"next": tx["destination"]}))
             + '">Retry sign-in for this document</a>'
             + '<p><a href="/register?' + html.escape(urlencode({"next": tx["destination"]}))
@@ -361,9 +365,35 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             + html.escape(urlencode({"audience": "admin", "next": tx["destination"]}))
             + '">Request administrator access</a></p>'
         )
+        def sign_in_problem(title, message, status):
+            result = page(title, f"<h1>{title}</h1><p>{message}</p>" + retry)
+            result.status_code = status
+            result.delete_cookie(STATE, secure=True, httponly=True, samesite="lax")
+            return result
+
+        def approval_required():
+            return sign_in_problem(
+                "Internal Documents access requires approval",
+                "If you requested access, wait for your Onesa administrator to review it. "
+                "If your access is already approved, try signing in again.",
+                403,
+            )
+
         try:
             if not code:
-                return page("Sign-in interrupted", retry)
+                if (
+                    error == "access_denied"
+                    and error_description == "Onesa access is unavailable for this application."
+                ):
+                    return approval_required()
+                if error in ("login_required", "interaction_required", "consent_required"):
+                    return sign_in_problem(
+                        "Sign in to Internal Documents",
+                        "Onesa could not reuse your sign-in session. "
+                        "If you requested access, wait for your administrator to approve it before signing in.",
+                        200,
+                    )
+                return sign_in_problem("Sign-in interrupted", "Sign-in could not finish.", 200)
             tokens = (exchange or get_tokens)(code, tx["verifier"])
             # Treat malformed upstream JSON exactly like an unavailable token
             # response. A non-object (or non-string token fields) previously
@@ -392,11 +422,9 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
                 raise jwt.InvalidTokenError("OIDC authorized party missing")
             account(access)
         except PermissionError:
-            raise HTTPException(403, "Internal Documents access required")
+            return approval_required()
         except (KeyError, ValueError, httpx.HTTPError, jwt.PyJWTError, KeysUnavailable):
-            result = page("Retry sign-in", retry)
-            result.status_code = 503
-            return result
+            return sign_in_problem("Retry sign-in", "Sign-in could not finish.", 503)
         session = secrets.token_urlsafe(48)
         with catalog.connection(database) as db:
             db.execute(
