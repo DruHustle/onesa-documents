@@ -389,6 +389,24 @@ class Journeys(unittest.TestCase):
         )
         self.assertEqual(self.client.get("/api/documents").status_code, 401)
 
+    def test_auth0_logout_removes_the_local_session_before_the_provider_handoff(self):
+        self.cfg["DOCS_AUTH0_LOGOUT_ENABLED"] = "true"
+        self.client = self.start()
+        self.assertEqual(self.client.get(self.initiate(BOOKMARK)).status_code, 303)
+        session = self.client.cookies.get("__Host-docs-session")
+        cookie = "__Host-docs-session=" + session
+        self.assertEqual(self.client.post("/logout", headers={"Origin": "https://external.test"}).status_code, 403)
+        self.assertEqual(self.client.get(BOOKMARK).status_code, 200)
+        logout = self.client.post("/logout", headers={"Origin": WEB})
+        self.assertEqual(logout.status_code, 303)
+        self.assertIn("Max-Age=0", logout.headers["set-cookie"])
+        destination = urlsplit(logout.headers["location"])
+        self.assertEqual(destination.scheme + "://" + destination.netloc + destination.path, ISS + "oidc/logout")
+        self.assertEqual(parse_qs(destination.query), {"client_id": ["docs-web"], "post_logout_redirect_uri": [WEB + "/signed-out"]})
+        self.assertIn("Signed out of Internal Documents", self.client.get("/signed-out").text)
+        self.assertEqual(self.client.get("/api/documents", headers={"Cookie": cookie}).status_code, 401)
+        self.assertEqual(self.client.post("/logout", headers={"Origin": WEB, "Cookie": cookie}).status_code, 200)
+
     def test_acl_consistent_on_all_surfaces(self):
         for uid in [PORTAL, ADMIN]:
             headers = self.bearer(uid)
