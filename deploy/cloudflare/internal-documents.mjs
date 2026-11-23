@@ -40,6 +40,14 @@ export default {
       if (location && response.status >= 300 && response.status < 400) {
         const destination = new URL(location, request.url);
         if (destination.origin === url.origin) destination.protocol = "https:";
+        if (request.method === "POST" && url.pathname === "/logout" &&
+            destination.origin === "https://auth.onesa.eu" && destination.pathname === "/oidc/logout" &&
+            !destination.username && !destination.password && !destination.hash &&
+            destination.searchParams.size === 2 && destination.searchParams.get("client_id") &&
+            destination.searchParams.get("post_logout_redirect_uri") === origin + "/signed-out") {
+          response.headers.set("Location", destination.href);
+          return response;
+        }
         const login = destination.origin === "https://auth.onesa.eu" && destination.pathname === "/authorize";
         const registration = request.method === "GET" && url.pathname === "/register" &&
           destination.origin === "https://account.onesa.eu" && destination.pathname === "/register" &&

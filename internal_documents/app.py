@@ -69,6 +69,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
     cfg = os.environ if settings is None else settings
     issuer = https_origin(cfg["DOCS_ISSUER"]) + "/"
     origin = https_origin(cfg["DOCS_ORIGIN"])
+    auth0_logout_enabled = cfg.get("DOCS_AUTH0_LOGOUT_ENABLED") == "true"
     # The production issuer is Auth0, not the Onesa registration UI.
     default_account_origin = "https://account.onesa.eu" if issuer == "https://auth.onesa.eu/" else issuer
     account_origin = https_origin(cfg.get("DOCS_ACCOUNT_ORIGIN", default_account_origin))
@@ -571,16 +572,28 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             + " is awaiting review.</p>",
         )
 
+    @app.get("/signed-out")
+    def signed_out():
+        return page(
+            "Signed out",
+            '<h1>Signed out of Internal Documents</h1><p><a href="/sign-in">Sign in again</a></p>',
+        )
+
     @app.post("/logout")
     def logout(request: Request):
         if request.headers.get("origin") != origin:
             raise HTTPException(403, "Invalid Origin")
         with catalog.connection(database) as db:
-            db.execute(
+            removed = db.execute(
                 "DELETE FROM sessions WHERE id=?",
                 (hash_value(request.cookies.get(SESSION, "")),),
-            )
-        result = page("Signed out", "<h1>Signed out of Internal Documents</h1>")
+            ).rowcount
+        if auth0_logout_enabled and removed:
+            result = RedirectResponse(issuer + "oidc/logout?" + urlencode({
+                "client_id": client, "post_logout_redirect_uri": origin + "/signed-out",
+            }), 303)
+        else:
+            result = signed_out()
         result.delete_cookie(SESSION, secure=True, httponly=True, samesite="lax")
         return result
 

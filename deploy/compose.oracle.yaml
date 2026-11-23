@@ -16,6 +16,7 @@ services:
       DOCS_AUDIENCE: https://api.docs.onesa.eu
       DOCS_CLIENT_ID: "${DOCS_CLIENT_ID:?Set the production Documents client ID}"
       DOCS_CLIENT_SECRET_FILE: /run/secrets/docs_client_secret
+      DOCS_AUTH0_LOGOUT_ENABLED: "${DOCS_AUTH0_LOGOUT_ENABLED:-false}"
       DOCS_DATA: /srv/docs
     secrets:
       - docs_client_secret

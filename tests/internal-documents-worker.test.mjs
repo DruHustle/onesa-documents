@@ -120,6 +120,30 @@ test("denials and binary attachment bodies retain status, headers and bytes", as
   }
 });
 
+test("keeps Auth0 logout on the verified origin, path, method, and return address", async () => {
+  const endpoint = "https://auth.onesa.eu/oidc/logout";
+  const query = new URLSearchParams({ client_id: "documents", post_logout_redirect_uri: root + "/signed-out" });
+  const location = endpoint + "?" + query;
+  const service = target => ({ DOCUMENTS_SERVICE: { fetch: () => new Response(null, {
+    status: 303, headers: { Location: target, "Set-Cookie": "__Host-docs-session=; Path=/; Secure; Max-Age=0" },
+  }) } });
+  const accepted = await worker.fetch(new Request(root + "/logout", { method: "POST" }), service(location));
+  assert.equal(accepted.status, 303);
+  assert.equal(accepted.headers.get("location"), location);
+  assert.match(accepted.headers.get("set-cookie"), /Max-Age=0/);
+
+  for (const [method, path, target] of [
+    ["GET", "/logout", location],
+    ["POST", "/unrelated", location],
+    ["POST", "/logout", endpoint + "?client_id=documents&post_logout_redirect_uri=https://external.test"],
+    ["POST", "/logout", location + "&id_token_hint=untrusted"],
+    ["POST", "/logout", location.replace("auth.onesa.eu", "external.test")],
+  ]) {
+    const refused = await worker.fetch(new Request(root + path, { method }), service(target));
+    assert.equal(refused.status, 503);
+  }
+});
+
 test("missing, unavailable, failed or unexpectedly redirecting service fails closed", async () => {
   const request = new Request(root + "/callback?code=private");
   for (const env of [

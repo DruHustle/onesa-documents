@@ -30,6 +30,8 @@ Signed-out visitors to the internal homepage see how to sign in or register. Int
 
 The sign-in flow uses Authorization Code with S256 PKCE, nonce and one-use browser-bound state. Signed access tokens must match the configured issuer and resource. The Onesa UUID and scoped products/roles are namespaced claims. The canonical grant is `internal-documents`. Previously approved `engineering-documents` identities remain eligible **only for the engineering collection** and still require per-document ACLs. Search, metadata, preview, drafts and attachment downloads apply the same restriction. HR access requires an explicit ACL plus canonical Internal Documents access. Portal and Identity administrators inherit no document grants.
 
+Internal Documents always ends its local session when a user signs out. Enable `DOCS_AUTH0_LOGOUT_ENABLED=true` after the dedicated Docs client allows the exact `DOCS_ORIGIN` plus `/signed-out` as a logout return URL and the reviewed Cloudflare Worker supports the handoff. The browser then continues to Auth0 to end the shared SSO session.
+
 ## Deploy Internal Documents on the Oracle host
 
 Use the existing host's Docker Engine, Compose v2 and host-network Cloudflare Tunnel. Set these deployment values on the Oracle host:
