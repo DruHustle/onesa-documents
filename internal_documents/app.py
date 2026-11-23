@@ -586,6 +586,15 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
 
     @app.get("/")
     def index(request: Request, q: str = ""):
+        if not request.cookies.get(SESSION) and not request.headers.get("authorization"):
+            return page(
+                "Internal Documents",
+                "<h1>Internal Documents</h1>"
+                "<p>Onesa team members with approved access can find company documents, "
+                "read revision history, and download files they have permission to use.</p>"
+                '<p><a href="/sign-in">Sign in with Onesa</a> · '
+                '<a href="/register">Create an Onesa account</a></p>',
+            )
         uid = web_identity(request)
         if isinstance(uid, Response):
             return uid
