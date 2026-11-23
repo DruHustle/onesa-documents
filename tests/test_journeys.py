@@ -186,6 +186,7 @@ class Journeys(unittest.TestCase):
     def test_registration_returns_user_or_admin_to_original_private_bookmark(self):
         bookmark = "/docs/engineering/qualification"
         for audience in ("user", "admin"):
+            self.client.cookies.clear()
             start = self.client.get("/register", params={"audience": audience, "next": bookmark})
             self.assertEqual(start.status_code, 303)
             address = urlsplit(start.headers["location"])
@@ -198,10 +199,44 @@ class Journeys(unittest.TestCase):
             self.assertEqual(parse_qs(urlsplit(resume.headers["location"]).query)["next"], [bookmark])
             oidc = self.client.get(resume.headers["location"])
             self.assertEqual(urlsplit(oidc.headers["location"]).path, "/authorize")
+            self.auth = parse_qs(urlsplit(oidc.headers["location"]).query)
+            self.assertEqual(self.auth["prompt"], ["none"])
             self.assertEqual(self.client.get("/api/documents").status_code, 401)
+            approved = self.client.get(
+                "/callback", params={"code": "fixture-code", "state": self.auth["state"][0]}
+            )
+            self.assertEqual(approved.status_code, 303)
+            self.assertEqual(approved.headers["location"], bookmark)
+            self.assertEqual(self.client.get("/api/documents").status_code, 200)
             replay = self.client.get("/registration/return")
-            self.assertEqual(parse_qs(urlsplit(replay.headers["location"]).query)["next"], ["/"])
+            self.assertEqual(parse_qs(urlsplit(replay.headers["location"]).query), {
+                "next": ["/"], "registration": ["complete"],
+            })
+            replay_oidc = self.client.get(replay.headers["location"])
+            self.assertEqual(parse_qs(urlsplit(replay_oidc.headers["location"]).query)["prompt"], ["none"])
         self.assertEqual(self.client.get("/register", params={"next": "https://other.example/"}).status_code, 400)
+
+    def test_unapproved_signup_returns_to_docs_with_a_local_retry(self):
+        for error, status, heading in (
+            ("access_denied", 403, "Internal Documents access requires approval"),
+            ("login_required", 200, "Sign in to Internal Documents"),
+        ):
+            with self.subTest(error=error):
+                self.client.get("/register", params={"next": BOOKMARK})
+                resume = self.client.get("/registration/return")
+                oidc = self.client.get(resume.headers["location"])
+                auth = parse_qs(urlsplit(oidc.headers["location"]).query)
+                self.assertEqual(auth["prompt"], ["none"])
+                denied = self.client.get("/callback", params={
+                    "state": auth["state"][0],
+                    "error": error,
+                    "error_description": "Onesa access is unavailable for this application.",
+                })
+                self.assertEqual(denied.status_code, status)
+                self.assertIn(heading, denied.text)
+                self.assertIn('%2Fdocs%2Farchitecture%2FONESA_DESIGN_SYSTEM', denied.text)
+                self.assertNotIn("Test pump drawing", denied.text)
+                self.assertEqual(self.client.get("/api/documents").status_code, 401)
 
     def test_file_mounted_client_secret_is_used_at_token_exchange(self):
         secret_file = self.root / "client-secret"
