@@ -1,5 +1,6 @@
 import hashlib
 import json
+import re
 import sys
 import tempfile
 import unittest
@@ -12,7 +13,7 @@ import build as edition
 
 class PublicEdition(unittest.TestCase):
     def test_public_release_matches_reviewed_deployment_baseline(self):
-        # The public site is anonymous. A change to its 258-file static corpus
+        # The public site is anonymous. A change to its approved static corpus
         # must therefore be an explicit reviewed release, not merely a
         # self-consistent edit to release.json and its chunks.
         release = json.loads((edition.ROOT / "release.json").read_text())
@@ -26,7 +27,7 @@ class PublicEdition(unittest.TestCase):
         )
         self.assertEqual(
             release["archive_sha256"],
-            "af09c803884239583c3c8fe5aff2f83e88ddbfa9781451eca4979ca03bb7b6c5",
+            "2541cfd2745e5784949253987b133f72ee5ca28523cad1fc79ce4fac9a596176",
         )
 
 
@@ -56,3 +57,17 @@ class PublicEdition(unittest.TestCase):
             self.assertFalse((output / "api/attachments").exists())
             for name in files:
                 self.assertFalse(name.endswith((".sqlite", ".env", ".py")))
+
+            scripts = output / "assets/js"
+            runtime, = scripts.glob("runtime~main.*.js")
+            chunk_map = re.search(
+                r'\.u=e=>"assets/js/"\+\(\{([^}]+)\}\[e\]\|\|e\)\+"\."\+\{([^}]+)\}\[e\]\+"\.js"',
+                runtime.read_text(),
+            )
+            self.assertIsNotNone(chunk_map, "Docusaurus runtime module map changed")
+            names = dict(re.findall(r'(\d+):"([a-f\d]+)"', chunk_map[1]))
+            hashes = dict(re.findall(r'(\d+):"([a-f\d]+)"', chunk_map[2]))
+            self.assertTrue(hashes, "Docusaurus runtime has no chunks")
+            expected_chunks = {f"{names.get(chunk, chunk)}.{digest}.js" for chunk, digest in hashes.items()}
+            missing = sorted(name for name in expected_chunks if not (scripts / name).is_file())
+            self.assertEqual(missing, [], "Routes depend on these absent JavaScript chunks")
