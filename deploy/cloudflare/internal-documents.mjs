@@ -21,7 +21,7 @@ export default {
       if (request.headers.has(name)) headers.set(name, request.headers.get(name));
     }
     const cookies = (request.headers.get("Cookie") || "").split(";").map(value => value.trim())
-      .filter(value => /^__Host-docs-(session|challenge)=/.test(value));
+      .filter(value => /^__Host-docs-(session|challenge|registration)=/.test(value));
     if (cookies.length) headers.set("Cookie", cookies.join("; "));
     headers.set("X-Forwarded-Proto", "https");
 
@@ -49,7 +49,14 @@ export default {
           return response;
         }
         const login = destination.origin === "https://auth.onesa.eu" && destination.pathname === "/authorize";
-        if (destination.username || destination.password || (destination.origin !== origin && !login)) {
+        const registration = request.method === "GET" && url.pathname === "/register" &&
+          destination.origin === "https://account.onesa.eu" && destination.pathname === "/register" &&
+          !destination.hash && destination.searchParams.size === 3 &&
+          destination.searchParams.get("product") === "internal-documents" &&
+          destination.searchParams.get("platform") === "web" &&
+          ["user", "admin"].includes(destination.searchParams.get("audience"));
+        if (destination.username || destination.password ||
+            (destination.origin !== origin && !login && !registration)) {
           return unavailable();
         }
         response.headers.set("Location", destination.href);

@@ -64,6 +64,47 @@ test("returns identity redirects to the browser and upgrades same-host origin re
   }
 });
 
+test("passes the Onesa registration handoff and its one-use bookmark cookie", async () => {
+  const registration = "https://account.onesa.eu/register?audience=user&product=internal-documents&platform=web";
+  const cookie = "__Host-docs-registration=fixture";
+  const service = {
+    fetch(url, init) {
+      if (new URL(url).pathname === "/register") {
+        return new Response(null, { status: 303, headers: {
+          Location: registration, "Set-Cookie": cookie + "; Path=/; Secure; HttpOnly; SameSite=Lax",
+        } });
+      }
+      assert.equal(init.headers.get("cookie"), cookie);
+      return Response.redirect(root + "/sign-in?next=%2Fdocs%2Fmy-bookmark", 303);
+    },
+  };
+  const start = await worker.fetch(new Request(root + "/register?next=%2Fdocs%2Fmy-bookmark"),
+    { DOCUMENTS_SERVICE: service });
+  assert.equal(start.status, 303);
+  assert.equal(start.headers.get("location"), registration);
+  assert.match(start.headers.get("set-cookie"), /^__Host-docs-registration=fixture;/);
+
+  const resumed = await worker.fetch(new Request(root + "/registration/return", {
+    headers: { Cookie: "unrelated=value; " + cookie },
+  }), { DOCUMENTS_SERVICE: service });
+  assert.equal(resumed.status, 303);
+  assert.equal(resumed.headers.get("location"), root + "/sign-in?next=%2Fdocs%2Fmy-bookmark");
+});
+
+test("blocks Account handoffs outside the Docs registration route and product", async () => {
+  for (const [path, target] of [
+    ["/callback", "register?audience=user&product=internal-documents&platform=web"],
+    ["/register", "admin"],
+    ["/register", "register?audience=user&product=portal&platform=web"],
+    ["/register", "register?audience=user&product=internal-documents&platform=web&next=https://example.org"],
+  ]) {
+    const response = await worker.fetch(new Request(root + path), {
+      DOCUMENTS_SERVICE: { fetch: () => Response.redirect("https://account.onesa.eu/" + target, 303) },
+    });
+    assert.equal(response.status, 503);
+  }
+});
+
 test("denials and binary attachment bodies retain status, headers and bytes", async () => {
   const bytes = Uint8Array.of(0, 128, 255);
   for (const status of [200, 401, 403, 404]) {
