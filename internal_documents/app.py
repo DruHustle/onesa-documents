@@ -263,6 +263,8 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         if audience not in ("user", "admin"):
             raise HTTPException(400, "Choose user or administrator registration")
         target = safe_destination(next)
+        if audience == "admin":
+            return RedirectResponse(account_origin + "/access?product=internal-documents&role=administrator", 303)
         binding = secrets.token_urlsafe(32)
         with catalog.connection(database) as db:
             db.execute("DELETE FROM registration_returns WHERE expires<=?", (clock(),))
@@ -364,7 +366,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             + html.escape(urlencode({"next": tx["destination"]}))
             + '">Retry sign-in for this document</a>'
             + '<p><a href="/register?' + html.escape(urlencode({"next": tx["destination"]}))
-            + '">Create account</a></p><p><a href="/register?'
+            + '" >Sign up</a></p><p><a href="/register?'
             + html.escape(urlencode({"audience": "admin", "next": tx["destination"]}))
             + '">Request administrator access</a></p>'
         )
@@ -613,7 +615,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
                 "<p>Onesa team members with approved access can find company documents, "
                 "read revision history, and download files they have permission to use.</p>"
                 '<p><a href="/sign-in">Sign in</a> · '
-                '<a href="/register">Create an Onesa account</a></p>',
+                '<a href="/register">Sign up</a></p>',
             )
         uid = web_identity(request)
         if isinstance(uid, Response):
