@@ -605,7 +605,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
                 "<h1>Internal Documents</h1>"
                 "<p>Onesa team members with approved access can find company documents, "
                 "read revision history, and download files they have permission to use.</p>"
-                '<p><a href="/sign-in">Sign in with Onesa</a> · '
+                '<p><a href="/sign-in">Sign in</a> · '
                 '<a href="/register">Create an Onesa account</a></p>',
             )
         uid = web_identity(request)
