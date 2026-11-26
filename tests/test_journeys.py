@@ -178,7 +178,7 @@ class Journeys(unittest.TestCase):
         self.assertIn("Onesa team members", guest.text)
         self.assertIn('href="/sign-in"', guest.text)
         self.assertIn('href="/register"', guest.text)
-        self.assertNotIn("https://portal.onesa.eu/intranet", guest.text)
+        self.assertNotIn("https://portal.onesa.eu/admin", guest.text)
         for private_value in (BOOKMARK, "Test pump drawing", "drawing.pdf", "Manage Onesa administrators"):
             self.assertNotIn(private_value, guest.text)
         self.assertEqual(self.client.get("/api/documents").status_code, 401)
@@ -908,7 +908,7 @@ class Journeys(unittest.TestCase):
         with TestClient(production, base_url="https://docs.internal.onesa.eu") as client:
             guest = client.get("/")
         self.assertEqual(guest.status_code, 200)
-        self.assertIn('href="https://portal.onesa.eu/intranet"', guest.text)
+        self.assertIn('href="https://portal.onesa.eu/admin">Portal Admin</a>', guest.text)
         self.assertNotIn(BOOKMARK, guest.text)
 
     def test_import_rejects_missing_collection_without_legacy_attestation(self):

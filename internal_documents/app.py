@@ -85,7 +85,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
 
     def page(title, body):
         intranet = (
-            '<a href="https://portal.onesa.eu/intranet">Onesa Intranet</a> · '
+            '<a href="https://portal.onesa.eu/admin">Portal Admin</a> · '
             if environment == "production"
             else ""
         )
@@ -94,7 +94,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             '<link rel="icon" href="/brand/onesa-docs.svg"><title>'
             + html.escape(title)
             + "</title><style>:root{color-scheme:light dark}body{max-width:66rem;margin:3rem auto;padding:0 1.25rem;font:1rem/1.6 system-ui}h1{line-height:1.15}pre{white-space:pre-wrap;overflow-wrap:anywhere}article,li{margin:1rem 0}small{display:block}input{font:inherit}</style>"
-            '<header><nav aria-label="Workspace">'
+            '<header><nav aria-label="Onesa Intranet">'
             + intranet
             + '<a href="/">Internal Documents</a></nav></header><main>'
             + body
@@ -364,7 +364,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             + html.escape(urlencode({"next": tx["destination"]}))
             + '">Retry sign-in for this document</a>'
             + '<p><a href="/register?' + html.escape(urlencode({"next": tx["destination"]}))
-            + '">Create an Onesa account</a></p><p><a href="/register?'
+            + '">Create account</a></p><p><a href="/register?'
             + html.escape(urlencode({"audience": "admin", "next": tx["destination"]}))
             + '">Request administrator access</a></p>'
         )
