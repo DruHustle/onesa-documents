@@ -184,9 +184,9 @@ class Journeys(unittest.TestCase):
         self.assertEqual(self.client.get("/api/documents").status_code, 401)
         self.assertEqual(self.client.get(BOOKMARK).status_code, 303)
 
-    def test_registration_returns_user_or_admin_to_original_private_bookmark(self):
+    def test_signup_returns_to_private_bookmark_and_admin_entry_requests_access(self):
         bookmark = "/docs/engineering/qualification"
-        for audience in ("user", "admin"):
+        for audience in ("user",):
             start = self.client.get("/register", params={"audience": audience, "next": bookmark})
             self.assertEqual(start.status_code, 303)
             address = urlsplit(start.headers["location"])
@@ -202,6 +202,12 @@ class Journeys(unittest.TestCase):
             self.assertEqual(self.client.get("/api/documents").status_code, 401)
             replay = self.client.get("/registration/return")
             self.assertEqual(parse_qs(urlsplit(replay.headers["location"]).query)["next"], ["/"])
+        review = self.client.get("/register", params={"audience": "admin", "next": bookmark})
+        self.assertEqual(review.status_code, 303)
+        destination = urlsplit(review.headers["location"])
+        self.assertEqual(destination.path, "/access")
+        self.assertEqual(parse_qs(destination.query), {"product": ["internal-documents"], "role": ["administrator"]})
+        self.assertNotIn("set-cookie", review.headers)
         self.assertEqual(self.client.get("/register", params={"next": "https://other.example/"}).status_code, 400)
 
     def test_file_mounted_client_secret_is_used_at_token_exchange(self):
@@ -873,8 +879,13 @@ class Journeys(unittest.TestCase):
                     url = urlsplit(response.headers["location"])
                     self.assertEqual(url.scheme, "https")
                     self.assertEqual(url.netloc, "account.onesa.eu")
-                    self.assertEqual(url.path, "/register")
-                    self.assertEqual(parse_qs(url.query)["audience"], [audience])
+                    self.assertEqual(url.path, "/register" if audience == "user" else "/access")
+                    query = parse_qs(url.query)
+                    self.assertEqual(query["product"], ["internal-documents"])
+                    if audience == "user":
+                        self.assertEqual(query["audience"], ["user"])
+                    else:
+                        self.assertEqual(query["role"], ["administrator"])
 
     def test_existing_private_volume_permissions_are_tightened(self):
         # mkdir(mode=0700) does not change an existing mount's permissions.
