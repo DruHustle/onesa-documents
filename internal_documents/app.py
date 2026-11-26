@@ -47,18 +47,6 @@ def safe_destination(value):
     return value
 
 
-def page(title, body):
-    return HTMLResponse(
-        '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
-        '<link rel="icon" href="/brand/onesa-docs.svg"><title>'
-        + html.escape(title)
-        + "</title><style>:root{color-scheme:light dark}body{max-width:66rem;margin:3rem auto;padding:0 1.25rem;font:1rem/1.6 system-ui}h1{line-height:1.15}pre{white-space:pre-wrap;overflow-wrap:anywhere}article,li{margin:1rem 0}small{display:block}input{font:inherit}</style>"
-        '<header><a href="/">Onesa Internal Documents</a></header><main>'
-        + body
-        + "</main></html>"
-    )
-
-
 class Draft(BaseModel):
     base_revision: str = Field(min_length=1, max_length=256)
     title: str = Field(min_length=1, max_length=512)
@@ -94,6 +82,25 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
         raise ValueError(
             "Staging Internal Documents must use a separate nonproduction hostname"
         )
+
+    def page(title, body):
+        intranet = (
+            '<a href="https://portal.onesa.eu/admin">Portal Admin</a> · '
+            if environment == "production"
+            else ""
+        )
+        return HTMLResponse(
+            '<!doctype html><html lang="en"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">'
+            '<link rel="icon" href="/brand/onesa-docs.svg"><title>'
+            + html.escape(title)
+            + "</title><style>:root{color-scheme:light dark}body{max-width:66rem;margin:3rem auto;padding:0 1.25rem;font:1rem/1.6 system-ui}h1{line-height:1.15}pre{white-space:pre-wrap;overflow-wrap:anywhere}article,li{margin:1rem 0}small{display:block}input{font:inherit}</style>"
+            '<header><nav aria-label="Onesa Intranet">'
+            + intranet
+            + '<a href="/">Internal Documents</a></nav></header><main>'
+            + body
+            + "</main></html>"
+        )
+
     audience = cfg["DOCS_AUDIENCE"]
     client = cfg["DOCS_CLIENT_ID"]
     secret_path = cfg.get("DOCS_CLIENT_SECRET_FILE")
@@ -357,7 +364,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
             + html.escape(urlencode({"next": tx["destination"]}))
             + '">Retry sign-in for this document</a>'
             + '<p><a href="/register?' + html.escape(urlencode({"next": tx["destination"]}))
-            + '">Create an Onesa account</a></p><p><a href="/register?'
+            + '">Create account</a></p><p><a href="/register?'
             + html.escape(urlencode({"audience": "admin", "next": tx["destination"]}))
             + '">Request administrator access</a></p>'
         )
@@ -605,7 +612,7 @@ def create(settings=None, *, keys=None, exchange=None, clock=time.time):
                 "<h1>Internal Documents</h1>"
                 "<p>Onesa team members with approved access can find company documents, "
                 "read revision history, and download files they have permission to use.</p>"
-                '<p><a href="/sign-in">Sign in with Onesa</a> · '
+                '<p><a href="/sign-in">Sign in</a> · '
                 '<a href="/register">Create an Onesa account</a></p>',
             )
         uid = web_identity(request)
